@@ -1,0 +1,1178 @@
+\chapter{What Syntax Can Do for Us}
+\label{sec:syntax}
+
+This section should show what makes Scala a particularly good choice to write \dsls\ in. It focuses
+on syntactic features, using examples to explain their usage and motivation, and also introduces
+some additional small tricks related to them, as well as useful idioms that fit nowhere else. The
+features described here are selected because of their suitablity for building \emph{control} or
+\emph{data abstractions}: they allow to build interfaces with structures to compose data and
+behaviour in an expressive way, without burdening with too many boilerplate declarations.
+
+%--------------------------------------------------------------------------------
+\section{Variants of Method Calling}
+\label{sec:method_calling}
+
+Scala, being based on a platform initially constructed for object-oriented programming, and being
+designed with full utilization of this paradigm in mind, naturally has a notion of
+\emph{methods}. It also makes plenty of use of them, and in fact, all behavioural functionality of
+the language can be reduced to method calls. However, unlike other object-oriented languages of
+similar kind, notably Java, Scala allows for a much higher syntactic flexibility of these, while
+under the hood still working with the same mechanisms. These syntactic flexibilities mainly appear
+in the form of \emph{operators} and \emph{infix notation}.
+
+In the this work, the term \enquote{operator} shall always mean a function whose name consists of
+non-alphabetic symbols and that is written infix (if binary) or pre- or postfix (if unary)~-- the
+same terminology as used in the language specification. With \enquote{infix notation}, the style of
+calling a \enquote{normal} method without dots and parentheses, as in |v foo x| instead of
+|v.foo(x)|, will be meant. To distinguish \enquote{regular} method calls from them, often the term
+\enquote{dotted call} will be used.  It is worth noting that most things being said here for methods
+hold as well for type constructors (\ie, class names like |::|), but these are not further
+investigated.
+
+\newthought{Overwriteable operators} are an idea that has been around for some time in other
+languages, although mostly in quite restricted form. Often, there are ways to redefine arithmetic
+and boolean operators, and comparisons. The former is what one usually needs when implementing
+numeric data types, such as matrices, that are not part of the standard libraries; the latter serves
+mainly for providing custom equality and orderings with syntactic integration, which is quite often
+desirable. There is of course also some \enquote{bending of the rules}, like the often-appearing
+string concatenation with |+|, or \CC{}'s stream piping with |<<| and |>>|. From all these use cases
+we see that programmers have a tendency to use operators where they seem the most natural (like in
+mathematical contexts), or where they seem to be able to express themselves better than with dotted
+method calling style, because of shortness or since their infix style may resemble the logical or
+data flow better.
+
+Some languages with a different background, mostly Haskell and Agda, take an opposite and quite
+radical approach: operators there are just names for functions, which by default can be written in
+infix notation (similarly \abbrev{LISP}, though it exclusively uses Polish Notation). This
+functionality has lead to a style of combinator libraries in them (like Haskell's |parsec| parser
+combinators\footnote{\protect\url{http://hackage.haskell.org/package/parsec} (visited on
+  2015-06-04).}), which can be quite expressive and concise at the same time (using these in Scala is
+also discussed in {\autosubref{sec:combinators}}). Scala, being partly influenced by these languages,
+provides an intermediate way, but almost as expressive: namely, method names are allowed to contain
+almost all unicode characters; and methods containing only non-alphabetical characters can be
+written inline. These infix calls are recognized and converted into standardized textual and dotted
+forms:
+\begin{lstlisting}[escapechar=!]
+  xs ++ ys !$\;\equiv\;$! xs.++(ys) !$\;\equiv\;$! xs.$plus$plus(ys)
+\end{lstlisting}
+As can be seen, the intermediate form of using the symbolic name of an operator in a dotted call is
+also allowed.
+
+\begin{lstlisting}[style=floating,
+  caption={A small \dsl{} to represent symbolic propositional formulae. The implicit conversion in
+    Line~12 allows to leave out the \lstinline|Var| constructor; such conversions are explainened in
+    \autosubref{sec:implicits}.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/Logic.scala}},
+  label=lst:logic]
+  sealed trait Expr {
+    def ||(other: Expr) = Or(this, other)
+    def &&(other: Expr) = And(this, other)
+    def unary_! = Not(this)
+  }
+
+  case class Var(s: String) extends Expr
+  case class Or(a: Expr, b: Expr) extends Expr
+  case class And(a: Expr, b: Expr) extends Expr
+  case class Not(a: Expr) extends Expr
+  
+  implicit def stringToExpr(s: String): Var = Var(s)
+\end{lstlisting}
+
+This translation is quite mechanical, and it does really not add any new functionality. It can,
+however, massively improve the readability of certain types of programs. For example, the logic
+\dsl{} from \autoref{lst:logic} allows to write a logic formula like this:
+\begin{lstlisting}
+  "a" || "b" && !"c"
+\end{lstlisting}
+instead of the following, which would be necessary in Java:
+\begin{lstlisting}[language=Java]
+  new Or(new Var("a"), new And(new Var("b"), new Not(new Var("c"))))
+\end{lstlisting}
+
+This example raises the question of how operator precedence behave. Can we be sure that when writing
+\lstinline[style=inline]{!"a" && "b" || "c"}, we do not, against our expectations, end up with %
+|Not(And("a", Or("b", "c")))|? It turns out that we can, at least in this case. But determining
+precedence of operators (or conversely, assigning the right precedence to an operator when defining
+it) can be a bit awkward in Scala. That is because, where other languages allow one to explicitly
+specify precedence and associativity of operators, in Scala these are determined solely by the name
+(\ie, the symbols) of the operator in question. This hard-wired convention is defined in the
+language specification \cite[][Chapter~6.12]{odersky2014:scala_spec}. The logic behind is basically
+the following:
+\begin{enumerate}\label{operators}
+\item Precedence is determined by the first symbol
+\item There are fixed values for the operator symbols occuring in practically any language
+  (\lstinline[style=inline]{|^&=!<>:+-*/%}, in increasing order); all other non-alphabetic symbols
+  equally bind stronger
+\item There are exceptions for assignment operators, ending in |=|
+\item There are exceptions of these exceptions for comparison operators
+\item The default associativity is left, unless the operator ends with |:|
+\end{enumerate}
+
+It is also possible to define unary prefix and postfix operators. Postfix operators are not really a
+special case, as they fit into the dotless method calling style explained below; prefix operators,
+however, as the negation operator |unary_!| in Line~4 of \autoref{lst:logic}, deserve to be
+mentioned separately. These are declared by defining a method with name
+\lstinline[mathescape]|unary_$\circ$|, where \(\circ\) is the name of the actual operator~--
+currently, however, the allowed symbols are constrained to |+-!~|.
+
+There is another question concerning operators, which is that of integrating them into existing
+types when allowing mixed-type applications. For example, given a matrix class |Matrix|, it is
+possible to implement |*| as a method of that class, such that for |m: Matrix|, the expression %
+|m * 2| typechecks; however, the expression |2 * m|, looking equally well-typed, cannot be provided
+simply, since the |*| operator of |Int| does not have any overload taking |Matrix| arguments, and
+|Int| cannot be just be \enquote{patched}. The usual workaround for this problem is to provide an
+implicit conversion from |Int| to a wrapper class having the desired method;
+\autosubref{sec:implicits} shows how that can be achieved in an \enquote{invisible} way, essentially
+reintroducing the expression |2 * m| into the language without having to actually change any class.
+
+\newthought{As soon as we realize} that operators can by reduced to simple method calls, we could
+also go the other way round: using method names, like they were operators. This sounds like a
+promising idea: expressions like |xs contains "bar"| become possible in this way. And in fact, such
+\enquote{dotless} calls are a very commonly used style in Scala. They can help readablility in
+different ways: for one, less-speaking method names like |map| or |withFilter| can be applied like
+this in a pipeline-like fashion. The following is a quite typical example, taken from the practical
+part of this work:
+\begin{lstlisting}
+  a.statements map (_.pretty) mkString ","
+\end{lstlisting}
+Or, even more readable (at least for the initiated):
+\begin{lstlisting}
+  require(nats forall (_ >= 0), "List contains negative numbers")
+\end{lstlisting}
+which defines a precondition on a value |nats| (a list of |int|s), by declaring that all its members
+must be nonnegative (otherwise exiting with an error message).\footnote{Example from
+  \protect\url{http://www.scala-lang.org/api/current/\#scala.Predef$} (visited on 2015-06-02).}%$
+
+\begin{lstlisting}[style=floating, caption={Example of a ScalaTest \dsl{} for writing unit tests in
+    a natural-language-like specification. This example is taken from \url{http://www.scalatest.org}
+    (visited on 2015-05-21) and slightly modified. Also note the anaphoric use of \lstinline|it| in
+    Line~10.},
+  label=lst:scalatest]
+  class ExampleSpec extends FlatSpec with Matchers {
+    "A Stack" should "pop values in last-in-first-out order" in {
+      val stack = new Stack[Int]
+      stack.push(1)
+      stack.push(2)
+      stack.pop() should be (2)
+      stack.pop() should be (1)
+    }
+
+    it should "throw if an empty stack is popped" in {
+      val emptyStack = new Stack[Int]
+      a [NoSuchElementException] should be thrownBy {
+        emptyStack.pop()
+      } 
+    }
+  }
+\end{lstlisting}
+
+This style of calling is often exploited in \dsls{} resembling phrases of natural language; such
+usage can be pushed quite far, as \autoref{lst:scalatest} shows. When defining such an interface, a
+standard trick is to construct wrapping objects closing over the relevant parameters. These objects
+can then provide methods in an order and wording close to a natural utterance; even \enquote{no-op}
+methods, like the |be| in the example, can then easily be included and interpreted. As an example,
+we could define a kind of \enquote{filter pipeline} for lists in the following way:
+\begin{lstlisting}
+  def map[A, B](f: A => B) = new {
+    def over(xs: List[A]) = new {
+      def skipping(p: A => Boolean) = xs filter (p andThen (!_)) map f
+    }
+  }
+\end{lstlisting}
+% alternative:
+% def map[A,B](f: A => B) = new {
+%   def over(xs: List[A]) = new {
+%     def skipping(p: A => Boolean) = xs filterNot p map f
+%   }
+% }
+In this case, |map| closes over a function and creates an anonymous object with a method |over|,
+which closes over a list and returns another object with a |skipping| method, in which the
+closed-over parameters are finally used to perform a filter-and-transform operation over the
+list. These methods can then be used in such a style:
+\begin{lstlisting}
+  scala> map ((_: Int) + 2) over List(1, 2, 3, 4, 5) skipping (_ < 3)
+  res0: List[Int] = List(5, 6, 7)
+\end{lstlisting}
+Unfortunately, in this case, an explicit type annotation is necessary in the first lambda
+expression, because of Scala's local type inference; however, in \dsls{}, parameters will often be
+of fixed custom types, relieving this effect. The example also uses |reflectiveCalls| to allow using
+anonymous types for shortness; in real code, every returned interface should be explicitly given by
+a trait. Using traits for this style also has the advantage that different \enquote{paths} of
+calling can be restricted by defining methods only as extensions on mixin combinations, and not
+directly on the traits themselves.
+
+\newthought{There are some additional} syntactic features to be mentioned in this subsection. These
+concern the ability to define getters and setters. It is a very common style in object-oriented
+languages not to expose fields of a class directly, but to provide instead methods like %
+|void setFoo(T value)| and |T getFoo()| to encapsulate the underlying value. This also has the
+advantage that invariants of the internal state can be ensured using pre- and postconditions, and
+more fine-grained access control is possible (like disallowing setting). On the other hand, such
+methods are an overhead: they are not standardized, and introduce the look of a method call where
+logically |foo = t| should be enough.
+
+Other languages, such as Python and \csharp{}, do have the ability to implement overloaded getting
+and setting of field assignment syntax, (with the |get|/|set| statements in \csharp{}, and the
+|__getattr__|/|__setattr__| magic methods in Python). This is very commonly used to ensure
+invariants on the values, but also to provide \enquote{virtual} fields, which instead of wrapping a
+variable are computed on-demand from other information. Now, when we already have overloaded member
+assignment, there naturally comes the desire to overload indexed (array member) assignment,
+too. While in \csharp{} and Python, it is possible to overload |()| and |[]| separately, in Scala,
+these are both unified under |()|, since square brackets are already in use for type arguments.
+
+\begin{lstlisting}[style=floating, 
+  caption={A mutable wrapper around an immutable dictionary type \lstinline|DictImpl|,
+    ensuring the size to stay below a fixed capacity. The capacity can be reset, but only
+    increasingly~-- it always has to be bigger than the current actual size, which is ensured in the
+    setter as a precondition.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/MutableDict.scala}},
+  label=lst:mutable_dict]
+  class MutableDict[T](private[this] var c : Int) {
+    private[this] var dict: DictImpl[T] = DictImpl.empty
+    private[this] var size: Int = 0
+
+    def update(key: String, value: T): Unit = {
+      if (dict.get(key).isEmpty) {
+        require(size < capacity, "Capacity exceeded!")
+        size += 1
+      }
+      dict = dict.updated(key, value)
+    }
+
+    def apply(key: String): Option[T] = dict.get(key)
+
+    def capacity: Int = c
+    def capacity_=(newCapacity: Int): Unit = {
+      require(newCapacity >= size, "Capacity too small!")
+      c = newCapacity
+    }
+  }
+\end{lstlisting}
+
+To examplify Scala's syntax for all this, consider \autoref{lst:mutable_dict}. It contains a small
+mutable wrapper around a (not further specified) immutable dictionary implementation, and has four
+methods: for updating and retrieving dictionary entries, and for getting and setting the maximum
+capacity of the dictionary. Retrieving an entry is implemented using the method |apply|
+(Line~13). This method is always used when an object is called like a function: in this case, given
+|d: MutableDict[Int]|, we could say |d("foo")| to get out the value at |"foo"|. The application gets
+translated to |d.apply("foo")|, which resembles the fact that indexing is not logically different
+from calculating a function value. Because of this, |apply| is also the whole magic that lies behind
+the |Function| interfaces of the standard library.
+
+Consistent with this, we can also write |d("foo") = 42|, to update that entry. This is achieved by
+providing |update| (Line~5), which is similar to apply, but takes as an additional parameter the new
+value, and returns |Unit| (since updating is only a side effect; it is also common to return the
+updated dict here, to allow method chaining). In this case, the updating operation also keeps track
+of the size, and ensures that the dictionary does not exceed its maximal capacity. Both |update| and
+|apply| can in principle take multiple parameters of any types, which allows to implement complex,
+multi-dimensional access, if necessary.
+
+The examples for field assignment are Lines 15 and 16. The getter of |capacity| is just a
+parameterless method with the same name, which is not a special syntactic feature. But it is also
+possible to accompany any such a method, having name \(x\), with a setter function, called
+\lstinline[style=inline,mathescape]|$x$_=|, which is used for assignment syntax; given such a
+method, \lstinline[style=inline,mathescape]|obj.$x$ = y| will be translated to
+\lstinline[style=inline,mathescape]|obj.$x$_=(y)|. In the above case, |capacity_=| has the
+additional effect of ensuring that the newly set capacity cannot be less than the current size.
+
+%--------------------------------------------------------------------------------
+\section{Advanced Parameter Passing}
+\label{sec:parameter_passing}
+
+Scala has a lot of syntactic features that make it easier to write \dsls{} in a very flexible, but
+at the same time intuitive way. Since we now have seen how conventional calling chains can be broken
+up using infix notation, we can complement this advantage with various ways of \enquote{advanced
+  parameter passing}. Combining the techniques of both kinds leads to a style that looks a lot like
+a were native syntax, but is actually only syntactic sugar for various forms of method calls.
+
+\newthought{One important concept} of advanced parameter passing is that of a \emph{block}. With
+blocks, Scala generalizes such notions as \enquote{bindings}, \enquote{local closures}, or similar
+constructs. The concept is quite simple: an expression of the form
+\begin{lstlisting}[mathescape]
+  {
+    stmt$_1$
+    $\vdots$
+    stmt$_n$
+    expr
+  }
+\end{lstlisting}
+creates a local scope (like in other curly-brace languages), which, when evaluated, results in the
+sequenced side effects of the |stmt|$_i$\,; but at the same time, the whole block represents an
+expression soleley consisting the value of the last expression |expr| (modulo bindings
+introduced). This is, first of all, useful for defining local variables and occasionally
+interleaving side effects (\eg, for debugging):
+\begin{lstlisting}
+  val x = foo {
+    val y = some + complicated(nested, expression)
+    println("Debug: " + y)
+    y
+  }
+\end{lstlisting}
+which is denotationally equal to
+\begin{lstlisting}
+  foo(some + complicated(nested, expression))
+\end{lstlisting}
+but also will print out the intermediate value of |y|.
+
+Above, we can also observe a second important syntactic feature: unary function calls, which usually
+require the argument to be put in parentheses, can be called directly on a block (|foo| here would
+just have a type like |T1 => T2|). This style allows the user to program against a library like it
+consisted of language statements~-- given that the library was intended to be used as such. Still,
+often this possibility is not enough to provide a natural interface, because the default evaluation
+order of application does not correspond to what is expected by the reader of the code. How this can
+be resolved is examplified in the next subsection.
+
+Blocks can also be used as result of lambda expressions, relieving the language from providing
+binding constructs such as |let| forms and generally unifying the style of programs. In the
+following, we define a function |f|, which calculates |x| as above, but with |nested| provided
+through an argument:
+\begin{lstlisting}
+  val f: (A => B) = nested => {
+    val y = some + complicated(nested, expression)
+    println("Debug: " + y)
+    foo(y)
+  }
+\end{lstlisting}
+
+\begin{lstlisting}[style=floating,floatplacement=t,
+  caption={Scheme-inspired \lstinline|Delayed| implementation, using a function from
+    \lstinline|Unit| and and a mutable variable for
+    caching.\hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/delay/Delay1.scala}},
+  label=lst:delay]
+  class Delayed[+T](thunk: Unit => T) { 
+    private[this] var cached: Option[T] = None
+
+    def force: T = cached match {
+      case Some(value) => value
+      case None => {
+        val value = thunk(())  // evaluation happens here
+        cached = Some(value)
+        value
+      }
+    }
+  }
+\end{lstlisting}
+
+\newthought{In most programming languages}, parameters passed to a method are evaluated when the
+method is called. That is, in a statement like
+\begin{lstlisting}
+  foo(bar(), y + z, { log("hi!"); foo })
+\end{lstlisting}
+every one of the arguments will show its side effects at the time |foo| gets called. As mentioned,
+however, this will sometimes be a behaviour that we want to avoid. To illustrate the concepts to
+resolve this, in the following an implementation of \enquote{delays} or \enquote{thunks} will be
+used~-- a means to encode lazy evaluation into a strict functional language, having long been used
+in Scheme~\cite[][Chapter~4.2]{abelson1996:structure} and going back to the examination of lazy
+evaluation orders of lambda calculus.
+
+The original idea is to simply represent a thunk of type |T|, that is, a value to be caluculated by
+need, as a function of type |Unit => T|, where |Unit| is the trivial type containing only one value,
+|()| (also pronounced \enquote{unit}). This way, instead of passing around some |T|, which of course
+would be evaluated immediately, we can hold a function which can compute the desired |T| later, if
+we actually need its value (this is usually done using a function called \enquote{force}). Once
+evaluated, the value is also cached, so that expensive evaluations happen at most once. One way of
+translating this into Scala would be the one shown in \autoref{lst:delay}.
+
+Here, |private[this]| is a Scala specific scope modifier marking |cached| as \emph{object private}:
+that way, not even objects of the same class can access the field. This restriction is even stronger
+than what is possible in most other object-oriented languages, but serves an excellent purpose of
+hiding mutable state, so that from outside, we can still speak of a purely functional (thus
+immutable) object. To compare with \CC{}, this has a similar spirit to marking fields used for
+caching |mutable|, but leaving the accessors |const|~-- holding the promise of referential
+transparency lies in the programmers responsibility, but can improve performance if used wisely.
+
+Still, the above implementation leaves room for improvement. To construct a |Delayed| value, one
+needs to manually call the constructor on a an anonymous function:
+\begin{lstlisting}
+  val d1 = new Delayed((_unit) => {
+    println("heavy computation")
+    2
+  })
+\end{lstlisting}
+We even need to name the superfluous |Unit| argument. Additionally, while the construction as shown
+is practically immutable from outside, it would be desireable to even get rid of such small traces
+of impurity. 
+
+Fortunately, both aspects can be improved by the help of the language. For this, we can use two new
+features: \emph{call-by-name} functiona arguments (indicated by the |=>| before the type) and
+\emph{call-by-need} values (|lazy val|). Using them, we end up with the code from
+\autoref{lst:delay_improved}, which is shorter, and at the same time purer and more easily usable.
+\begin{lstlisting}[style=floating,
+  caption={Improved \lstinline|Delayed| implementation, using Scala's laziness and block
+    constructs. The \lstinline|delay| \enquote{factory} is declared inside the companion object,
+    while the default constructor of \lstinline|Delayed| is set private.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/delay/Delay2.scala}},
+  label=lst:delay_improved]
+  class Delayed[+T] private (thunk: () => T) {
+    private[this] lazy val cached: T = thunk()
+    def force: T = cached  // evaluation happens here implicitly
+  }
+
+  object Delayed {
+    def delay[T](delayed: => T) = new Delayed(() => delayed)
+  }
+\end{lstlisting}
+Using that, we can write the following:
+\begin{lstlisting}
+  val d2 = delay {
+    println("heavy computation")
+    2
+  }
+\end{lstlisting}
+
+The changes introduced in this improved version are to use Scala's laziness constructs: the |cached|
+value is now a |lazy| reference to the evaluation of the thunk, and |force| simply returns the value
+directly~-- which in turn evaluates the thunk. The subtle difference between call-by-name arguments
+and |lazy| is the caching behaviour: while both are evaluated non-strictly, a |lazy val| is stored,
+as soon as it has been evaluated, while by-name parameters are reevaluated every time (internally,
+they are converted to |def|s like the |thunk| representation). It is the interplay of these two
+strategies that makes this way of argument passing so useful.
+
+Furthermore, a factory method |delay| is provided, which takes as an argument an unevaluated |T| and
+wraps it into the old constructor taking a function, totally hiding the underlying implementation~--
+consequently, the actual constructor is now marked |private|. This unevaluated |T| is intended to be
+provided as a block, a form in which form the code now barely looks different from a native language
+construct.\footnote{Thinking this example further, we could just get rid of \lstinline|Delayed| at
+  all and only use call-by-name and lazy values, since they in fact use the same techniques under
+  the hood. The purpose of this was, however, to show the possibilities of defining new syntax-like
+  methods, not of seriously implementing behavioural data structures.}
+
+\label{sec:currying}
+\newthought{As can be seen} in the last example, it is possible for functions to be called on blocks
+(with braces), which makes them look like they were language statements. In fact, every application
+to a single argument can be replaced by a block. When designing \abbrev{API}s in Scala, this
+possibility is regularly exploited, and also occurs frequently in the standard library. But often,
+we also want to simulate a parametrized statement, like in in this example:
+\begin{lstlisting}
+  repeat(5) {
+    println("hello!")
+  }
+\end{lstlisting}
+which would just print out |"hello!"| five times.
+
+\begin{lstlisting}[style=floating,
+  caption={Simple combinator for repeating an action \lstinline|n| times, using a curried parameter
+    list. The \lstinline|block| needs to be passed by name, as it is evaluated in each iteration for
+    its side effects. 
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/Imperative.scala}},
+  label=lst:repeat]
+  def repeat(n: Int)(block: => Any): Unit = 
+    if (n > 0) {
+      block
+      repeat(n - 1)(block)
+    }
+\end{lstlisting}
+
+Defining methods with this interface is possible as well, if we take into account the more accurate
+description of the \enquote{block application} syntax: namely, that the \emph{last single
+  application} of the parameter lists of a method can be replaced by a block. From this it follows
+that we can use \emph{curried methods} to write \enquote{pseudo-statements} with parameters. An
+implementation of the example |repeat| function is shown in \autoref{lst:repeat} (which also is
+another example of call-by-name).
+
+Curried methods are methods with multiple parameter lists, written like this:
+\begin{lstlisting}[mathescape]
+  def fn(x$_{11}$: X$_{11}$, ..., x$_{1k_1}$: X$_{1k_1}$)...(x$_{n1}$: X$_{n1}$, ..., x$_{nk_n}$: X$_{nk_n}$): Y
+\end{lstlisting}
+They are included into the language to simplify partial application, of which the above use case is
+an instance. Partial application is the mechanism allowing to \enquote{fix a parameter} of a
+function; that means, if we have |f: (A, B) => C| and some given |a: A|, then we could write %
+|g: B => C = (b => f(a, b))|. But this can be expressed simpler, if |f| is curried: from %
+|f2: A => B => C|, we can make |g2: B => C = f(a) _|. (That these are always interchangeable is a
+consequence of the fact that there is an isomorphism (to be exact, an adjunction) between all types
+|(A, B) => C| and |A => (B => C)|.)
+
+This does not by itself reveal immediate usefulness (especially since there has to be included a
+\enquote{dummy} |_|), but is a practical feature when dealing with higher-order
+functions. Additionally, besides the described syntactic trick, there are other cases in which
+curried functions are helpful: \eg, they can help with type inference, since (speaking simplified)
+for each parameter list, there is a separate type unification step, after which some type parameters
+can be fixed (this is often exploited in multi-parameter polymorphic higher-order functions such as
+|foldRight|/|foldLeft|). Similarly, implicit method parameters (explained later in
+\autosubref{sec:implicits}) are a form of curried parameters, and the implicit parameter list is
+resolved separately from the other parameters.
+
+
+%--------------------------------------------------------------------------------
+\section{Monads and For-Comprehensions}
+\label{sec:monads}
+
+In the previous subsection, a (rather primitive) implementation of delayed values was shown. This
+implementation was already able to do what is expected, and provides an intuitive construction
+interface; however, in its minimal state, composing different delayed actions quickly becomes
+tedious. Imagine a scenario in which we have ways to query a remote database and a web \abbrev{API},
+both in a delayed way (using something like the above implementation):
+\begin{lstlisting}
+  def getUrl(id: String): Delay[String] = delay {
+    dbConnection.getId(id).address
+  }
+  def getFromApi(url: String, path: String): Delay[String] = delay {
+    webRequest(url).get(path)
+  }
+\end{lstlisting}
+Now, if we want to combine these requests, we would have to do the following:
+\begin{lstlisting}
+  val getInformation(id: String): Delay[String] = delay {
+    val address = getUrl(id).force
+    val info = getFromApi(address, "/info").force
+    "Address " + address + " has info " + info
+  }
+\end{lstlisting}
+Here, |force| needs to be called twice inside the |delay| block to unwrap the results of the nested
+delayed calls, which are then combined and wrapped again.
+
+This was just an easy case. If there happen to be more layers, or we have to interleave other
+operations such as validations of data or error handling, the repeated nesting of |delay| and
+|force| does not anymore keep its conciseness, but starts to look awkward and even becomes a source
+of error and confusion (a result which is known as \enquote{callback hell} in the JavaScript
+community).
+
+The complication introduced by combining this style of operations, involving types of the form %
+|T => M[T]| where |M[_]| is a kind of \enquote{context} (in this case, the delay of values), has
+been known for long; and there is a pattern to resolve it, based on the observation that most of the
+time, the |M[_]| used will be a \emph{monad}.
+
+A monad is a category-theoretic construct on functors, requiring them to be able to be transformed
+in certain ways according to some laws. A theoretically founded treatment, which still refers to the
+programmer's point of view of \enquote{context containers}, can be found in \cite{moggi1991:monads};
+but in essence, a monad can be described as a parametrized type |M[_]|, with a \enquote{constructor
+  function} of type |A => M[A]| for all A (in the following called |pure|), such that on every
+|M[A]| there are methods
+\begin{lstlisting}
+  def map[B](f: A => B): M[B]
+  def flatMap[B](f: A => M[B]): M[B]
+\end{lstlisting}
+subject to the following conditions:
+\begin{enumerate}
+\item |m map (x => g(f(x)))| \(\,\equiv\,\) |m map f map g|
+  % \\ \(\forall (\text{\lstinline[style=inline]|m: M[A]|}), (\text{\lstinline[style=inline]|f: A =>
+  %   B|}), (\text{\lstinline[style=inline]|g: B => C|})\)
+\item |pure(x) flatMap f| \(\,\equiv\,\) |f(x)| 
+  % \quad \(\forall (\text{\lstinline[style=inline]|x: A|}), 
+  % (\text{\lstinline[style=inline]|f: A => M[B]|})\)
+\item |m flatMap (pure _)| \(\,\equiv\,\) |m|
+  % \quad \(\forall (\text{\lstinline[style=inline]|m: M[A]|})\)
+\item |(m flatMap f) flatMap g| \(\,\equiv\,\) |m flatMap { x => f(x) flatMap g }|
+ % \\ \(\forall (\text{\lstinline[style=inline]|m: M[A]|}), (\text{\lstinline[style=inline]|f: A =>
+ %    M[B]|}), (\text{\lstinline[style=inline]|g: B => M[C]|})\)
+\end{enumerate}
+where |m| is a monadic value of type |M[A]|, and |f|, |g| are \enquote{actions} of types |A => M[B]|
+and |B => M[C]|.
+
+It is the type of |flatMap| that allows to sequence actions of types like |A => M[B]| in a concise
+form. The \enquote{purpose} of the monad laws thereby is to ensure that using |flatMap| behaves
+sensibly with respect to the structure of the underlying type; they are also the responsible for the
+ability to rearrange the below-mentioned comprehension syntax in a meaningful way.
+
+\begin{lstlisting}[style=floating,
+  caption={Full example of the \lstinline|Delayed| implementation, with monadic
+    functions. Additionally, the \lstinline|Delayed| class was replaced by a trait, of which
+    anonymous instances are created by the factory \lstinline|delay|.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/delay/Delay3.scala}},
+  label=lst:delay_monadic]
+  sealed trait Delayed[+T] {
+    import Delayed._
+
+    def force: T
+
+    def map[U](f: T => U): Delayed[U] = delay {
+      f(this.force)
+    }
+
+    def flatMap[U](f: T => Delayed[U]): Delayed[U] = delay {
+      f(this.force).force
+    }
+    
+    def foreach(f: T => Unit): Unit = f(this.force)
+  }
+
+  object Delayed {
+    def delay[T](delayed: => T) = new Delayed[T] {
+      private[this] lazy val cached: T = delayed
+      def force: T = cached
+    }
+  }
+\end{lstlisting}
+
+\newthought{The point of using monads} is that Scala provides so-called \emph{for-comprehensions}
+for them for free, for any type implementing the necessary interface (usually, |map| and |flatMap|;
+possibly also |foreach| and |withFilter|). These comprehensions generalize the |for|-syntax of the
+language to arbitrary monadic types, allowing one to write nested (flat)mapping of functions in a
+linear, somewhat imperative-looking way. As an example, in \autoref{lst:delay_monadic}, the
+|Delayed| class of the last subsection has been rewritten to support a monadic interface. Using the
+comprehension syntax with this implementation, the previously mentioned example can be rewritten
+like this:
+\begin{lstlisting}
+  val getInformation(id: String) = for {
+    address <- getUrl(id)
+    info <- getFromApi(address, "/info")
+  } yield ("Address " + address + " has info " + info)
+\end{lstlisting}
+This comprehension gets translated as follows:
+\begin{lstlisting}
+  getUrl(id)
+  .flatMap(((address) => getFromApi(address, "/info"))
+  .map((info) => "Address " + address + " has info " + info)
+\end{lstlisting}
+Desugaring for-comprehensions happens before type checking and does not ensure any behavioural
+guarantees, so it practically amounts to duck-typing of whatever values are used. The exact way of
+translating is documented in the language specification
+\cite[][Chapter~6.19]{odersky2014:scala_spec}.
+
+In fact, the |Future| type of the standard library (|scala.concurrent.Future|) is not so much
+different from this version of |Delayed|, except that it runs thunks not later on demand, but
+asynchronously to the current context (an implicit |ExecutionContext| is passed with most methods on
+futures). Futures, too, have a factory called |Future| and implement the monadic interface, and it
+is considered good style to use the available combinators implemented on it, instead of nesting
+|Future| calls and blockings.
+
+\newthought{The type of behaviour} that is provided by monads can be compared to \abbrev{SQL}
+statements, which is also the reason that for-comprehension are used mostly for collections (for
+comparison, the \csharp{} equivalent of for-comprehensions, called \abbrev{LINQ} (Language
+Integrated Query)\footnote{Monad comprehensions as \enquote{generalized for} have found their way
+  not only into \csharp; the idea, initially implemented in Haskell's \emph{do-notation}, is also
+  present in \fsharp's \emph{computation expressions}, which generalize the concept even more by the
+use of continuation-passing techniques \cite[][p.~62]{syme2012:fsharp}.},
+even uses \abbrev{SQL} keywords like |from| and |select|). The type of |flatMap| allows to express
+\enquote{nested selection} and \enquote{joins} on arbitrary \enquote{containers}, with whatever
+semantics make sense for them: sequencing, nondeterminism, delayed continuation, and so on. For
+example, we can provide the following combinator:
+\begin{lstlisting}[label=lst:join]
+  def join[A, B](a: Iterable[A], b: Iterable[B]) = new {
+    def by[C](f: (A, B) => C): Iterable[C] = for {
+      x <- a
+      y <- b
+    } yield f(x, y)
+  }
+\end{lstlisting}
+which can be used like this\footnote{Calling this function will lead to a warning signalling that
+  this only works using the compiler flag\kern-1ex \lstinline|reflectiveCalls|\kern-0.9em. Using a
+  trait instead of an anoymous structural type would be considered better style, and is probably
+  safer, but requires more setup than this example. The function also does not work really well with
+  the collections hierarchy, as it does not properly preserve container types.}:
+\begin{lstlisting}[style=break-lines]
+  scala> join(List(1, 2, 3), List('a', 'b', 'c')) by ((_, _))
+  res0: Iterable[(Int, Char)] = List((1,a), (1,b), (1,c), (2,a), (2,b), (2,c), (3,a), (3,b), (3,c))
+\end{lstlisting}
+(Note also the trick of introducing the intermediate object with a |by| method, which is called in
+infix notation!)
+
+The same code, replacing |Iterable| with |Future|, can be used to get a combinator with
+\enquote{await both} semantics for Futures; in fact, it would make some sense for any monad. For
+this reason, monads are often subsumed under a type class (\autosubref{sec:type_classes}), and there
+are libraries like
+Scalaz,\footnote{\protect\githubcommit{https://github.com/scalaz/scalaz}{/tree/24cf7f3dcf9baa9ea438269eea6b24fd9476a544}
+  (visited on 2015-05-16).} providing a range of general methods and combinators for all monads (and
+many other general classes). Another notable monad, which is not immediately appearent as such, is
+the |Parser| type of parser combinators (\cf~\autosubref{sec:combinators}), for which the monad
+provides conditional and error-preserving sequencing of parsing functions.
+
+There is one additional thing to say about the use of the term \enquote{monad} or \enquote{monadic}
+in Scala or other languages supporting syntactic sugar for them: sometimes, for a type, the monad
+syntax (\ie, the comprehensions) still makes sense, even if the monad laws are not strictly
+fulfilled. For example, |scala.util.Try| from the standard library does not behave the same on both
+sides of the second above-mentioned law, because of its special exception-capturing behaviour. Or,
+types for random variables, which are monads too, do not fulfill the laws by conventional equality;
+instead, they only guarantee the left and right hand sides of the equations to have identical
+probability distributions. But in all these cases, using comprehension syntax is nontheless useful
+and adequate enough to not prohibit it. For that reason, also such types are still commonly called
+\enquote{monadic}.
+
+% \begin{lstlisting}
+%   for {
+%     a <- delay { println("a"); 1 }
+%     b <- delay { println("B"); 2 }
+%   } yield (a + b)
+% \end{lstlisting}
+% %
+% is translated to:
+% %
+% \begin{lstlisting}
+%   delay({
+%     println("a");
+%     1
+%   }).flatMap(((a) => delay({
+%     println("B");
+%     2
+%   }).map(((b) => a.$plus(b)))))
+% \end{lstlisting}
+
+
+%--------------------------------------------------------------------------------
+\section{Working with Literals}
+\label{sec:literals}
+
+When developing custom data types, we want them to be usable as naturally as possible, especially in
+the context of \dsls. This includes working with values of them in an intuitive and integrated
+way~-- namely, handling custom literals should not be different from handling \enquote{primitive}
+values, and ideally, custom types should be able to be written exactly as natural in their
+domain. Scala also provides some means to achive this: first, it has the possibity to provide custom
+\emph{string interpolators}; and furthermore, new \emph{extractors} can be defined for arbitrary
+types, allowing to create new pattern matching ability without having to define case classes.
+
+\newthought{String interpolators} are, for one, a way of providing readable constructors of data
+types through strings, essentially by decomposing normal string literals interleaved with arbitrary
+expressions into a function application. There are three interpolators provided by the Scala
+standard library: |s|, |f|, and |raw|~\cite{suereth:string_interpolation}. The first one does not do
+much more than providing syntactic sugar for string building (using |toString|):
+\begin{lstlisting}
+  val x = 123
+  val y = (true, List(1, 2, 3))
+  val str = s"Number: $x, boolean: ${y._1}"
+\end{lstlisting}
+Here, |str1| will result in the string |"Number: 123, boolean: true"|. As can be seen, the
+interpolator escapes identifiers starting with |$|; and in general, arbitrary block expressions can
+be written inside curly braces following a |$|. So, continuing the above example, we can write an
+expression like
+\begin{lstlisting}
+  s"""The sum is ${if (y._2.sum % 2 == 0) "even" else "odd"}"""
+\end{lstlisting} %$
+which evaluates in this case to |"The sum is even"| (the quotes inside braces are automatically
+\enquote{escaped}, since desugaring happens independently before literal parsing). The other two
+standard interpolators work in a similar way, but additionally allow |printf|-style format
+specifications or ignore escape sequences (like |\n|).
+
+% The other interpolators have different semantics: |f| works similar to |s|, but additionally allows
+% to specify |printf|-style format specifications after the expressions. For example, |f"$x%.02f"|
+% will result in |"123.00"|. Similarly, |raw| ignores escape sequences: |raw"$x \n $y"| will result in
+% |"123 \n (true,List(1, 2, 3))"|.
+
+More interesting, however, is the fact that we can write our own interpolators. Every call to an
+interpolator of the form |intp"some string"| gets rewritten by the compiler to a method call on
+|StringContext|, which is essentially only a container for an array of strings: %
+|StringContext("some string").intp|. If there are parameters in the string, these get passed to the
+method: |intp"using $x's value"| becomes |StringContext("using ", "'s value").intp(x)|. %$
+
+This rewrite rule is extensible insofar as we can add methods to |StringContext| through implicit
+conversions (see \autosubref{sec:implicits}). These allow to (syntactically) extend classes without
+inheriting from them. Using this technique, one can write new interpolators using a wrapper like the
+following:
+\begin{lstlisting}
+  implicit class Bla(sc: StringContext): AnyVal {
+    def foo(params: Any*) = fooImpl(params)
+  }
+\end{lstlisting}
+This can then be applied to any string literal with an arbitrary number of arguments, like %
+|foo"x $a y $b z"|, reducing to
+\begin{lstlisting}
+  Bla(StringContext("x ", " y ", " z")).foo(a, b)
+\end{lstlisting}
+While it is common and often useful to allow arbitrary parameters (|Any*| is internally represented
+as a |WrappedArray|), an interpolator can in principle take any number of concretely typed
+parameters. Since the interpolator call is translated to an equivalent method call anyway,
+incompatible or insufficient calls are automatically refused by the type checker. And while the |s|
+interpolator is relatively trivial (it just adds the parameters and the string chunks), a more
+complex interpolator will often involve parsing the string which is interpolated, and even introduce
+some extra internal syntax to modify the behaviour of the passed interpolants.
+
+String interpolators are widely used for easier construction and deconstruction of text-based
+data. Prominent examples are constructors for \abbrev{JSON}~\cite{voitot2013:json}, and recently
+quasiquotes, which are used in macro programming and allow the construction of Scala \abbrev{AST}s
+without having to construct them \enquote{by hand}~\cite{shabalin2013:quasiquotes,
+  shabalin:quasiquotes}. With the help of macros, quasiquotes can also be pattern matched on. Even
+the \abbrev{XML} literal syntax of Scala is planned to be replaced by interpolators in future
+versions~\cite{odersky2015:scala_state}.
+
+\newthought{Another important use} of literals, apart from constructing them, is deconstructing
+them~-- that is, accessing their values. For that purpose, there is in principle already a solution:
+just using members returning whatever is logically contained in a class. Now, since Scala has the
+feature of case classes, which allow pattern matching, these will often be preferable; however, not
+every datatype will be written as a case class. The most obvious example for that would be a class
+implemented in Java. In other cases, the underlying implementation might be much more complicated
+than the logical form of the concept, and is not wanted to be exposed; this would e.g. happen in a
+set implementation. So, there arises the need for being able to define custom patterns.
+
+Additionally, as soon as we have a means of introducing new patterns, we can do even more things
+than were initially looked for: with newly definable patterns, we are also able to introduce
+synonyms to other patterns (or means of deconstruction), or we can provide more content specific
+matching of data, deconstructing objects in a semantically richer way.
+
+\begin{lstlisting}[style=floating, label=lst:logic_extractors,
+  caption={Extractor objects for disjunction and negation, as defined in
+    \autoref{lst:logic}. Conjunction is analogous to disjunction. Note that, since there are no
+    unary tuples in Scala, \lstinline|unapply| for \lstinline|!| only needs to return
+    \lstinline|Option\[Expr\]|.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/Logic.scala}}]
+  object || {
+    def unapply(e: Expr): Option[(Expr, Expr)] = e match {
+      case Or(a, b) => Option(a, b)
+      case _ => None
+    }
+  }
+
+  object ! {
+    def unapply(e: Expr): Option[Expr] = e match {
+      case Not(a) => Option(a)
+      case _ => None
+    }
+  }
+\end{lstlisting}
+
+The way Scala allows defining custom patterns is through \emph{extractors}. An extractor is an
+object with an |unapply| method, taking as parameters the value that should be matched, and
+returning an |Option| of a tuple of the possibly extracted values. The |None|-ness of the |Option|
+signifies whether the match succeeded. As an example, look at the extractors in
+\autoref{lst:logic_extractors}, which accompany the \dsl{} for logic expressions from
+\autoref{lst:logic}. These definitions (plus the left-out one for |And|) allow to write an
+evaluation method for |Expr| as follows:
+\begin{lstlisting}
+  def eval(env: Map[String, Boolean]): Option[Boolean] = this match {
+    case Var(s) => env.get(s)
+    case a || b => join(a.eval(env), b.eval(env)) by (_ || _)
+    case a && b => join(a.eval(env), b.eval(env)) by (_ && _)
+    case !(a) => a.eval(env).map(!_)
+  }
+\end{lstlisting}
+(This uses the monadic |join| operation as described on \autopageref{lst:join}, adapted for
+|Option|.)
+
+Such extractors are also automatically generated for case classes, which is the reason they are
+mainly used for data types that can be pattern matched on. On the other hand, there are types which
+hide their internal implementation and expose only |apply| and |unapply| methods, for example
+|Set|s. This allows to introduce an additional layer separating interface from representation.  A
+different usage of them is to provide \enquote{additional views} on data. A nice example for this is
+Scala's regular expression functionality, which uses extractors for retrieving the matched groups of
+a regex. Consider the following definition of a |Regex| object~\cite[][p.~611]{odersky2008:programming}:
+\begin{lstlisting}
+  scala> val decimal = """(-)?(\d+)(\.\d*)?""".r
+  decimal: scala.util.matching.Regex = (-)?(\d+)(\.\d*)?
+\end{lstlisting}
+The |decimal| object now has a variadic |unapply| method, which allows to extract all groups (inside
+parentheses) to be assigned to valus in a pattern matching context:
+\begin{lstlisting}
+  scala> val decimal(sign, integerpart, decimalpart) = "-1.23"
+  sign: String = -
+  integerpart: String = 1
+  decimalpart: String = .23
+\end{lstlisting}
+This can be considered much more readable than using \enquote{manual} methods of finding and
+extracting groups from a match. It also shows a style of using extractors depending not so much on
+the data matched on, but parametrized by external information.
+
+%--------------------------------------------------------------------------------
+\section{Implicit values}
+\label{sec:implicits}
+
+% |"bar".foldLeft(0)((a,_) => a+1)|
+Scala has the curious property that it seemingly allows methods to be called on objects on which
+they are not defined, or parameters to be passed in an automatic, scope dependent way without
+mentioning them~-- but all that in a strongly-typed way. This works through the system of
+\enquote{implicits}. They are what allows to write |"""(-)?(\d+)(\.\d*)?""".r| without |r| being
+defined in |java.lang.String|, or to call |List(("b", 1), ("a", 2)).sorted| without having to pass
+an anonymous |Comparator| for |(String, Int)|.
+
+The unified, \enquote{explicit} treatment of such implicit values, allowing \emph{type-directed
+  implicit parameter passing}~\cite{oliveira2010:type-classes}, is a language feature quite unique
+to Scala. It subsumes in a very powerful way notions existent in other languages, such as type
+classes, extension methods, monkey-patching, and dynamic scope. Implicits in principle do not really
+add anything to the core language semantically~-- they can always be reduced to explicit method
+calls. However, they allow for some huge reductions of boilerplate code at the call site, for
+example when converting between representations, extending funtionality, or passing around
+configuration infomation or context. This feature is ubiquitously used in the standard and other
+libraries, and several patterns of using implicits have been established.
+
+Implicits come in two flavors: \emph{implicit conversions} and \emph{implicit parameters}. Both in
+practice often interact with each other, but have different properties when it comes to
+\enquote{discovery} and typing. The foundation of them and their usage are described below in this
+subsection, in a more theoretic overview. Since some major applications, such as
+\hyperref[sec:extensions]{extension methods} and \hyperref[sec:type_classes]{type classes}, are
+later in this work explained individually, and other usages are spread throughout many examples,
+there will be no larger pieces of example code here.
+
+The basic building block of using implicits, both conversions and parameters, are
+\emph{implicit declarations}. All |val|s, |var|s, |def|s, |object|s and |class|es can be marked as
+|implicit| (as long as they are not at top-level), and only such marked declarations are subject to
+implicit resolution. Underlying idea of both is that functions and parameters can be applied without
+being explicitly named, if they can be uniquely determined from the surrounding \emph{implicit
+  scope}. The exact rules of how this scope is determined are defined in the specification
+\cite{odersky2014:scala_spec}; Section~6.26 of it describes implicit conversion, and Chapter~7 is
+dedicated to implicit parameters (plus some features related to them). In the rest of this
+subsection, these peculiarities are not discussed; they basically amount to searching surrounding
+imports, companion objects and supertypes, and preferring strictly \enquote{closer} and
+\enquote{more specific} declarations to more \enquote{distant} ones.
+
+\pagebreak[4]
+\newthought{Implicit conversions} act on the level of typing context and method names. They are
+declared by providing an implicit value of a function type, that is, an implicit |def| or |val| with
+an |apply| method of suitable type. If then an object in a context does not have a compatible type,
+an implicit conversion is sought and, if available, automatically applied. For example, when we call
+|qux(baz)|, where |baz: A|, but |qux| does only take parameters of type |B| (and it is not the case
+that |A <: B|), an implicit conversion function |a2b: A => B| being in scope would be automatically
+inserted, resulting in an effective call of |qux(a2b(baz))|.
+
+Furthermore, if some method is called on an object, say, |foo.bar(1)|, and the type of |foo| does
+not contain a method |bar| with that name and signature, then instead of immediately rejecting this
+as an error, the compiler searches for suitable implicit conversions to types \emph{with that
+  method}. If |foo| has type |A| and the result of |bar| in this context is inferred to be |B|, then
+a suitable conversion is an implicit value of type |A => { def bar(i: Int): B }| (modulo subtyping
+relations). When such a conversion, call it |fooWrapper|, can uniquely be found, it is automatically
+applied; the resulting term behaves the same as |fooWrapper(foo).bar(1)|.
+
+Conversions are subject to an important restriction: they can not be \enquote{stacked}; that is,
+they are not, in a sense, transitive. If |A| is implicitly convertible to |B| via |a2b| in implicit
+scope, and similar |B| to |C| by |b2c|, there does \emph{not} automatically exist the implicit
+conversion |b2c(a2b(_))|. This is to simplify the rules and reasoning, but also to prevent
+exponential search complixity at compilation.
+
+\newthought{The use of such automatic conversions} is manifold: for one, they can simplify code in a
+setting where datatypes are wrapped in layers, but different layerings essentially mean the
+same. For example, in the propositional logic \dsl{} from \autoref{lst:logic}, |Var("x")| does not
+contain any more information than just |"x"|, although it is still desirable to represent variables
+in a dedicated type wrapper. By providing
+\begin{lstlisting}
+  implicit def stringToExpr(s: String ): Var = Var(s)
+\end{lstlisting}
+both advantages can be kept: when writing an expression, it is possible to use string literals alone
+(like |"x" && ~"y"|), but internally, always the case class is used.
+
+A similar use case is the conversion between essentially equal data types not between layers, but
+between foreign libraries or equally prominent representation. For example, such conversions exist
+in the Scala collections library under |scala.collection.JavaConversions| for the Java
+\abbrev{API}'s equivalents of |Iterable|, |Set|, |Map|, and so on. They are also a very common means
+to provide Scala-native interfaces to Java libraries using anonymous classes as callbacks; in that
+way, given
+\begin{lstlisting}
+  implicit def function2ActionListener(f: ActionEvent => Unit) = 
+    new ActionListener {
+      def actionPerformed(event: ActionEvent) = f(event)
+    }
+\end{lstlisting}
+one does not need to pass a literal |ActionListener| to a Swing event listener, but can directly use
+an anonymous function, which is much more natural (example taken
+from~\cite[][p.~444]{odersky2008:programming}). Such conversions are also defined in the |Prelude|
+module for primitive types and their boxed equivalents (such as |char2Character|).
+
+In a more complex form, implicit conversions to custom types can be used to virtually extend other
+types, without affecting their actual implementation. This pattern is known under \emph{implicit
+  wrappers} and described in more detail in \autosubref{sec:extensions}. It is quite regularly made
+use of in the standard library to extend the (sometimes rather poor, or at least unconvenient for
+Scala) interface of Java standard classes for all array types, primitive types, and strings, which
+are, for example, augmented with higher-order collection methods.
+
+\newthought{Implicit parameters}, in contrast to conversion, act by the automatic insertion of
+method parameters. Parameters subject to implicit resolution must be declared in their own parameter
+group (see \autopageref{sec:currying} on currying). There can be only one such group, which must
+come last in the series of parameter lists. Take the following method, assumed to be defined in
+class |X|:
+\begin{lstlisting}
+  def fn(a: A)(implicit b: B): X
+\end{lstlisting}
+Given values |x|, |a|, and |b|, |fn| can always be called in a regular fashion:
+|x.fn(a)(b)|. However, when a value of type |B| is in implicit scope, say |implB| (declared, \eg, as
+an |implicit val|), we are allowed to leave out the second parameter group, and just write
+|x.fn(a)|~-- which automatically will again resolve in |x.fn(a)(implB)|. (It should be noted that it
+is always possible to explicitly pass values into implicit argument positions, as they are just
+syntactic sugar~-- so no generality is lost, if \enquote{overrides} are desired.)
+
+This kind of parameter passing is mostly used when an interface requires to pass a lot of callbacks
+or context objects. By making these explicit in the type, but implicit for the call site, the
+boilerplate effort for the user of the interface can be reduced, as well as the readablility
+improved, while no \enquote{interface information} gets lost. The classic example of this is the
+above-mentioned need to pass a |Comparer| to Java's |Collections.sort|, when trying to sort
+something which is not a base type. When the sorting method would take the |Comparer| as an implicit
+argument, we could provide it implicitly once and for all for every new type, and never see it being
+passed explicitly (except cases when we want to change sort order in special ways, which are however
+better fitted for |sortBy|). In fact, Scala's standard library's |sorted| works exactly that way,
+and takes an implicit |Ordering[T]| for the type |T| to be sorted. In \autosubref{sec:type_classes},
+the generalization of this powerful pattern is explained in more detail.
+
+A non-type-class example of implicit parameters is |scala.concurrent.Future|, most of which's
+combinators take an implicit |ExecutionContext|, like the method
+\begin{lstlisting}
+  foreach[U](f: T => U)(implicit executor: ExecutionContext): Unit  
+\end{lstlisting}
+That way, the kind of asyncronous execution needed for executing concrete |Future| callbacks is
+always available internally, but never has to explicitly passed around. It can be changed globally
+by importing or defining a new implicit |ExecutionContext| in close enough scope.
+\enlargethispage{1em}
+
+\newthought{Finally, a word of caution}: using implicits in a careless way \emph{can} lead to very
+hard to find sources of error. This happens especially if an implicit conversion unrealizedly is in
+scope, applies to some value, and then fails. The author learned this the \enquote{hard way} when an
+expression of the form |foo + 12|, which was mysteriously typed as |Int| in the \abbrev{IDE}, failed
+at runtime with a |NoSuchElementException|~-- only after inspecting the bytecode, it could be found
+out that there was an implicit |Map| from |foo|'s type to |Int| lying around, whose |apply| method
+was treated as a conversion and came into effect on |foo| (which the |Map| did not contain); even
+worse, the implicit value was even \enquote{leaked} through the external interface. The problem was
+then resolved by wrapping the |Map| in a purely internal case class, and changing the type of the
+implicit parameters for which it was originally thought accordingly.
+
+To avoid such situations, two general advices concerning implicits should in almost any situation be
+followed:
+\begin{itemize}
+\item Implicit conversion should never fail at runtime with exceptions, or otherwise.
+\item Implicit parameters, result types of implicit conversions, and every implicit declaration,
+  should have as specific and customized types as possible~-- if in doubt, they should be wrapped in
+  a class just for that purpose.
+\end{itemize}
+In summary: let the compiler do the work for you~-- but always be in control of it\ldots
+
+% Implicit conversions and implicit parameters, incl. default values. \enquote{Unit} pattern for
+% numeric literals; dynamic implicit parametriziation (aka \enquote{dynamic scope})
+
+%--------------------------------------------------------------------------------
+\section{Macros}
+\label{sec:macros}
+
+In contrast to the other subsections, this one tries to give more of an overview and background of
+its topics than examples and concrete use cases. This is because macros are relatively new, and will
+probably change soon. Nevertheless, they are an important (and practically used!) \enquote{last
+  resort} for certain kinds of problems in the scope of this work, and certainly deserve to be
+mentioned in an overview of \dsl{} techniques.
+
+\newthought{Macros are a traditional topic} when it comes to \dsls{}, though their prominence in
+software development has declined over time. They are in their many forms a much more general way to
+extend the expressiveness of a language, not only by adding seemingly impossible syntax, but
+especially by providing semantic extensions via changing or introducing non-standard evaluation
+behaviour, which they can do because they operate \emph{before} function evalulation. Macros in the
+sense used here (as proper syntactic transformations or \emph{metaprograms}, not only text
+replacement) were originally introduced in \abbrev{LISP}, where they come out in a natural way from
+the fact that S-expressions (defining functions) are able to be applied to other S-expressions
+(representing functions)~-- so they are, in a way, a lucky side effekt of the syntactic simplicity
+of \abbrev{LISP}~\cite{mccarthy1960:recursive}.
+
+As indicated, \enquote{proper} macros are rare in today's programming languages. Frequently,
+especially in object-oriented languages, we find so called \emph{reflection} facilities in the
+standard libraries, which allow to inspect and sometimes manipulate the representation of programs
+at runtime. Or, there are \abbrev{API}s for the compiler or interpreter allowing to extend
+them. Both of this has been existing in Scala practically for free since a long time, because of the
+already available Java reflection
+\abbrev{API}~\cite[][\protect\lstinline|java.lang.reflect|]{oracle:java_api_spec}. The reasons to
+avoid macros are, for one, that in most languages different from \abbrev{LISP} complex reification
+and representation support is needed, which is more complicated to handle than to just write code
+differently; additionally, macros can be considered problematic from the point of view of certain
+software development philosophies or styles, since they are hard to test and somewhat opaque. As an
+interesting example of a language which does have a very structured approach to metaprogramming in
+the sense used here, though, we could mention the statistics language
+R~\cite{r2015}.\footnote{Specifically concerning R's metaprogramming capabilities, see
+  \protect\url{https://cran.r-project.org/doc/manuals/r-release/R-lang.html\#Computing-on-the-language}
+  (visited on 2015-11-14).}
+
+Still, there recently has been put effort into implementing a proper macro system for
+Scala~\cite{burmako2013:macros}, along with a quoting syntax~\cite{shabalin2013:quasiquotes}, which
+significantly reduces difficulty and improves readability of macro implementations. These
+implementations are available in newer Scala versions (since 2.10), and, although considered
+experimental, are already widely used in libraries. There is currently a project called
+|scala.meta|\footnote{\protect\url{http://scalameta.org/} (visited on 2015-04-26).} which aims at
+improving and unifying all metaprogramming facilities available in Scala (including reflection) and
+will provide a completely new \abbrev{API} in the future.
+
+\newthought{The desire to write functions} that transform not their input values, but the whole
+expression trees they are called on, is not as exotic as it may seem at first. In fact, the
+well-known C preprocessor does exactly that, though in a very limited form~-- which is the reason
+the \enquote{functions} that can be |#define|d are called macros, too.
+
+People write macros at this level for two reasons: inlining, and non-evaluation. The first one is
+quite discussable~-- nowadays, the overuse of preprocessor macros for \enquote{optimization} is
+often frowned upon, as they can lead to strange errors when not thoughtfully crafted, and explicit
+inlining is mostly considered useless with modern compilers, since their optimizations turn out to
+be superiour to anything that can be influenced manually. In Scala, for this purpose, there is an
+annotation |@inline| (and a corresponding |@noinline|) in the standard library, serving as hints for
+compilers. Additionally, there have been put efforts into the improvement of the performance of
+implicit wrappers, which have lead to \emph{value classes}~\cite{odersky2012:value_classes} (they
+allow to discard a wrapper class at runtime, similar to Haskell's |newtype|s).
+% There are often only hints in the form of annotations, like the C/\CC{} |inline| modifier
+% and \abbrev{GCC}'s |__attribute__((always_inline))|, or Scala's |@inline| static annotation. These
+% are, however, mostly hints to the compiler, which it often can safely choose to ignore, and shall
+% not concern us here.
+
+The second traditional reason to use macros, non-evaluation, has its classic use case in the writing
+of debug functions and other condition-like code simulating statements, which cannot easily be
+written in the form of functions, since parameter passing in conventional imperative semantics is
+strict and always evaluates the arguments. However, as we have seen, this is easily possible in
+Scala, by passing blocks, evaluated on demand, as call-by-name parameters, which is a very common
+technique present everywhere in the libraries.
+
+But going a bit further with the debug example, we soon arrive at the limits of regular syntax and
+semantics. For example, it is impossible with non-macro functions to implement an assertion function
+whose error message automatically contains the actual condition it was given; that is the reason
+|assert| from the standard library takes a string as its second parameter. Obviously, it would be
+desirable if the expression |assert(foo > 0)| would, on error, automatically print a message like %
+|"Assertion 'foo > 0' was violated"|, extracting the text |foo > 0| from its argument. (This is
+certainly possible with preprocessor macros, but unsafe, since their expansion happens before
+compilation on the raw program text.)
+
+With macros, we have the ability not to deal with values, but with expressions, and this problem can
+be solved: we could take the given expression |foo > 0|, convert it to a string representation, and
+return an expression containing a non-macro assertion with the |foo > 0| as condition and a message
+built from the string representation:
+\begin{lstlisting}[mathescape]
+  macroAssert(foo > 0) $\rightsquigarrow$ assert(foo > 0, "Expected foo > 0!")
+\end{lstlisting}
+
+\newthought{As soon as we have macros} at our disposal, a lot more power than in this simple example
+becomes available. In current Scala libraries using macros, they are typically used for two
+purposes: to rearrange or check closures/blocks, and to automatically generate boilerplate
+implementations. Both cases are normally used in \dsls{} (or even \enquote{meta-\dsls{}}, simplifying
+the implementation of libraries).
+
+The first of these use cases mostly involves transforming a closure into something more complicated,
+which nevertheless can be recovered from a simple block of code. One typical example of this would
+be the |async| syntax~\cite{haller2013:async}, which provides a \dsl{} for computations with
+futures.\footnote{Code available at
+  \protect\githubcommit{https://github.com/scala/async}{/tree/1568a28842e2c538ca735a34274ae5e4ee5eca22}
+  (visited on 2015-05-17). The subsequent examples are also taken from the documentation provided
+  there.} Remember that we can combine future values in various ways by using their monadic
+interface, which gives the ability to use for comprehensions:
+\begin{lstlisting}
+  def slowCalcFuture: Future[Int] = ...
+  val future1 = slowCalcFuture
+  val future2 = slowCalcFuture
+
+  def combined: Future[Int] = for {
+    r1 <- future1
+    r2 <- future2
+  } yield r1 + r2
+\end{lstlisting}
+The library simply provides a macro |async|, and a marker method |await|, which allow the above
+comprehension to be written like this:
+\begin{lstlisting}
+  def combined: Future[Int] = async {
+    await(slowCalcFuture) + await(slowCalcFuture)
+  }
+\end{lstlisting}
+This macro, instead of transforming the code to monad function calls, like it would be done with a
+comprehension, builds an object containing a state machine which is registered at the futures'
+|onComplete| handlers. This is also more efficient, since it does not involve multiple anonymous
+classes for the intermediate closures.
+
+The async/await pattern is also implemented in \csharp{} (since version 5.0), and is becoming
+popular in other languages, too (\eg, Python~\cite{selivanov2015:coroutines}). However,
+using macros, it can be implemented in Scala purely as a library~-- the underlying transformations,
+as applied by the \csharp{} compiler and the |async| macro, are quite the
+same~\cite{torgerson2010:asynchronous}.
+
+In a similar direction goes the |spores| proposal~\cite{miller2013:spores}. Its purpose is to allow
+an interface taking a closure to be guaranteed that no local references (like |this|) are captured
+in a dangerous way. Such a guarantee is necessary for tasks like serialization of functions, or
+passing around closures in distributed systems. This is done by wrapping a function literal in a new
+type |Spore[-T, +R]|, but allowing them only to be constructed through a macro which enforces that
+all captured variables are explicitly copied before usage (example taken from the cited
+\abbrev{SIP}):
+\begin{lstlisting}
+  val s = spore {
+    val h = helper  // explicitly copy this reference
+    (x: Int) => {
+      val result = x + " " + h.toString
+      println("The result is: " + result)
+    }
+  }
+\end{lstlisting}
+Using any variables not defined in the header in the lambda expression will result in a compilation
+error.
+
+Many examples for the second popular macro usage, automatic implementation of \enquote{redundant}
+code, can be found in the |shapeless|
+library.\footnote{\protect\githubcommit{https://github.com/milessabin/shapeless}{/tree/b613c33a0cb5901e25e2f0e87926f7ce41e85c3d}
+  (visited on 2015-05-17).} This library provides, among other things, a wide range of higher-rank
+polymorphic combinators; that is, typesafe functions working on general products and coproducts,
+like folds over arbitrary tuples. These things are mostly achieved by using powerful type classes
+(\autosubref{sec:type_classes}), which do not, however, have to be provided by the user. Instead,
+|shapeless| relies on \emph{automatic type class derivation}. This method is based on \emph{implicit
+  macros}~-- which are just implicit instances, for which the code is automatically generated by
+macros at compile time. These derivations usually just involve inspecting the code of case classes
+and producing type class witness |object|s according to their shape and type.
+
+
+%%% Local Variables: 
+%%% TeX-master: "document"
+%%% End:

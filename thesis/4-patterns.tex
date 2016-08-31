@@ -1,0 +1,780 @@
+\chapter{Patterns for DSL Implementation}
+\label{sec:patterns}
+
+This section is based on the previous one, and shows examples of how the Scala features introduced
+there (and some more) can be combined into patterns typically used in \dsls. By \enquote{patterns},
+not the strict architectural layouts, as used in object oriented design, are meant. Rather, this is
+a collection of ways commonly used to achieve a certain goal: implementing \dsls{} in a
+syntactically and functionally satisfying way. It is noteworthy that almost all of the patterns are
+virtually native to Scala, in the sense that the features used were introduced for the very purpose
+of simplifying their application: traits for mixins, implicits for type classes and extension
+wrappers, the syntactic flexibility of method calls for combinators and other kinds of syntactic
+\dsl{} helpers.
+
+Additionally, as showcases of these patterns and the interplay of various Scala techniques, a number
+of existing \dsl{} libraries will be mentioned or used as examples.
+
+%--------------------------------------------------------------------------------
+\section{Extensions and Rich Wrappers}
+\label{sec:extensions}
+
+One of the simplest forms of \dsls{} is to extend existing data types with new operations that are
+frequently needed for the domain under consideration, to provide shorter functions to interoperate
+with new types, or to combine values into domain constructs using more concise syntax.
+
+One common example of this would be |Range|, as it exists in the Scala prelude. A |Range| object
+represents a contiguous sequence of integers, which can be stored efficiently only by its first and
+last value (and optionally, step size). The conventional way to construct such a value would
+probably be through a factory object like |Range(1, 10)|, or, if we want to avoid ambiguities, %
+|Range.inclusive(1, 10)|. This is, however, not as easy as it could be~-- there are ways of
+providing special syntax for ranges, which can be more readable. For example, in Haskell, one could
+write |[1..10]| for the same thing.
+
+\begin{lstlisting}[style=floating, label=lst:range, mathescape, floatplacement=t, belowskip=-1em,
+  caption={Implicit wrapper class to build ranges from integers, for a given type \lstinline|Range|
+    with a construction function.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/Range.scala}}]
+  // suppose {in|ex}clusiveRange: (Int, Int) $\text{\ttfamily\color{textgray}=}$> Range
+  implicit class IntRangeOps(self: Int) {
+    def to(bound: Int): Range = inclusiveRange(self, bound)
+    def until(bound: Int): Range = exclusiveRange(self, bound)
+  }
+\end{lstlisting}
+
+Fortunately, Scala has implicits and a very practical method calling syntax. Using both, we can
+write code like in \autoref{lst:range}. There, we simply create an implicit wrapper class, closing
+over the first |Int| and giving it methods |to| and |until|, which then construct the respective
+ranges with a second |Int|. Using such a class, we now
+% we're faking a float here... what a dirty hack.
+\par\newpage
+\begin{lstlisting}[mathescape, frame=lines, basicstyle=\ttfamily\small, captionpos=b,
+  style=numbered, xleftmargin=0.5ex, framexleftmargin=0.5ex, numbersep=0pt, belowskip=\baselineskip,
+  label=lst:units, floatplacement=H, caption={Implicit wrapper to construct \lstinline|Value|s,
+    which are type-safely dimensioned doubles. The primitive units are definded literally and can be
+    applied in postfix notation; \lstinline|of| allows to select an arbitrary dimension as its type
+    argument (such as \lstinline|9.8.of\[Meter / Second / Second\]|). Some units have been left out 
+    here.}
+  \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/Units.scala}]
+  // suppose definition: class Value[D $\text{\ttfamily\color{textgray}<:}$ Dimension]
+  implicit class dimensionSymbols(d: Double) {
+    def meters = new Value[Meter](d)
+    def seconds = new Value[Second](d)
+    def amperes = new Value[Ampere](d)
+    def coloumbs = new Value[Ampere * Second](d)
+  }
+\end{lstlisting}
+have new syntax like |1 to 10|.\footnote{Note
+  that, when trying this out in an interpreter in the shown form, there will be a conflict with the
+  implicit conversions of the same names defined in the prelude. A solution is to simply rename the
+  methods.} Implicit classes are just syntactic sugar of a class declaration with an additional
+implicit |def| for the respective conversion; they were introduced specifially for this use case. A
+lot of such functionality-patching extensions can be found in the Scala standard library. Besides
+|to| and |until|, there are also |StringOps| and |WrappedString|, and similarly |ArrayOps| and
+|WrappedArray|.
+
+The code in \autoref{lst:units}\footnote{In this case, the accompanying example on Github is far
+  more experimental than the others, as it contains an \emph{unfinished} system trying to proove
+  equality of dimensions at type level.} contains a further example of how implicit wrappers are
+often utilized: to provide a nicer construction experience than regular constructors. The implicits
+listed there allow to write numbers in \abbrev{SI} units in a more natural way, \eg, |42.0 meters|,
+instead of |new Value[Meter](42.0)|. Since there are more possibilities of units than just the
+bases, two means of including them are shown: one could, for convenience, provide similar
+constructors for all well-known combinations, like it is done in |coloumbs|; or, a general interface
+like |of| could be provided, allowing to construct arbitrarily dimensioned values by a type
+argument. A similar system (although not using type parameters) can also be found in the standard
+library at |scala.concurrent.Duration| for time durations, which get mostly used for specifying
+timeouts in concurrent environments.
+
+There is one caveat when using many implicit wrapper classes: although all calls look like they
+would work directly on the objects, they are often in fact passed through multiple layers of nested
+calls, which can lead to performance loss. Such cases should of course be inspected with a profiler
+before applying premature optimization; still, if necessarry, there are some tricks available, which
+were already brought up in \autosubref{sec:macros}. For one, there is the |@inline| annotation,
+which can be used to hint the compiler to optimize implicit conversion calls. Then, in newer Scala
+versions, there are \emph{value classes} available~\cite{odersky2012:value_classes}. These allow, if
+certain conditions are fulfilled, to erase wrapper types at runtime, and to replace implicit calls
+by static applications. Furthermore, if this is not enough, macros can be used to specialize
+implicit wrappers again, and get rid of some layers.
+
+
+
+% \begin{lstlisting}[style=floating, mathescape, label=lst:units, floatplacement=H,
+%   caption={Implicit wrapper to construct \lstinline|Value|s, which are type-safely dimensioned
+%     doubles. The primitive units are definded literally and can be applied in postfix notation;
+%     \lstinline|of| allows to select an arbitrary dimension as its type argument (such as
+%     \lstinline|9.8.of\[Meter / Second / Second\]|).}
+%     \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/Units.scala}]
+%   // suppose definition: class Value[D $\text{\ttfamily\color{textgray}<:}$ Dimension]
+%   implicit class dimensionSymbols(d: Double) {
+%     def meters = new Value[Meter](d)
+%     def seconds = new Value[Second](d)
+%     def kilograms = new Value[Kilogram](d)
+%     def mols = new Value[Mol](d)
+%     def candelas = new Value[Candela](d)
+%     def kelvins = new Value[Kelvin](d)
+%     def amperes = new Value[Ampere](d)
+
+%     def coloumbs = new Value[Ampere * Second](d)
+%     def of[D <: Dimension] = new Value[D](d)
+%   }
+% \end{lstlisting}
+
+%--------------------------------------------------------------------------------
+\section{Type Classes}
+\label{sec:type_classes}
+
+Type classes are another pattern built on implicits. They are a language construct originally
+introduced by Haskell, and comparable to interfaces in object orientation, in that they allow to
+specify operations that a type must support. The main purpose of them is to constrain generic
+functions and to write implementations against an interface; however, they are in a few ways more
+general than conventional interfaces, and solve some peculiarities of them. Among type theorists,
+type classes are said to unify advantages of both \emph{ad-hoc polymorphism} (overloading) and
+\emph{parametric polymorphism} (type parametric functions); this is described in
+\cite{wadler1989:ad-hoc}, while the terminology goes back to~\cite{strachey2000:fundamental}. A
+detailed description of how Haskell's type class concept has been translated into Scala, including
+an overview of their applications and generalizations using implicits, can be found
+in~\cite{oliveira2010:type-classes}.
+
+\begin{lstlisting}[style=floating, 
+  caption={\lstinline|Read| type class, together with implementations for strings and booleans.~%
+  \github{dsl-examples/blob/master/src/main/scala/dsl_examples/Read.scala}},
+  label={lst:read}]
+  trait Read[T] { 
+    def read(s: String): T 
+  }
+
+  object Read {
+    implicit object stringIsRead extends Read[String] {
+      def read(s: String) = s
+    }
+
+    implicit object boolIsRead extends Read[Boolean] {
+      def read(s: String) = s match {
+        case "true" => true
+        case "false" => false
+      }
+    }
+  }
+\end{lstlisting}
+
+To illustrate how type classes work, and how they are different from interface inheritance (embodied
+in Scala by \enquote{normal} trait inheritance), consider \autoref{lst:read}. This example shows a
+|Read| type class~-- a concept from Haskell, which says \enquote{we can parse a value of a type from
+  a string}. This possibility is represented by the parametrized trait |Read|. The crucial
+difference from conventional interfaces is that some type |T|, implementing the type class, is not
+supposed to inherit from |Read|~-- instead, a \emph{witness object} of type |Read[T]| should be
+provided. The witness object, in this case encapsulating only one function, can then be used by
+third parties to perform the desired operation. In the example, such objects are shown for the
+trivial |String| instance, and for |Boolean|. When another method uses the type class to constrain a
+parameter, the witness needs to be passed in as an additional parameter, which can then be used
+inside the method to operate on the constrained type.
+
+This sounds like a syntactic hassle at the call site, similar to Java's handling of, for example,
+custom equality. And in fact, passing an anonymous |Comparer<T>| to a sorting method is just an
+explicit variant of the concept of a type class. However, in both Haskell and Scala, type classes
+are empowered to prevent such reduncancy: in both languages, the witness dictionary is passed
+implicitly to functions requiring a parameter to be instance of a type class. In Haskell, this
+passing is automatically resolved and inserted by the compiler~\cite{hammond1990:type_classes},
+while in Scala, it is made explicit at the definition side by using |implicit| parameters. Consider
+the following typical method definition:
+\begin{lstlisting}
+  def readAll[T](l: List[String])(implicit readT: Read[T]): List[T] =
+    l map readT.read
+\end{lstlisting}
+This reads every element of a list into a specified type, if the elements implement |Read|. Calling
+this function is simple, provided that the necessary implicit value is in scope:
+\begin{lstlisting}
+  scala> readAll[Boolean](List("true", "false", "false"))
+  res0: List[Boolean] = List(true, false, false)
+\end{lstlisting}
+Of course, the result type always has to be provided explicitly, since it cannot be inferred from a
+string. Similarly, one type class implementation can also depend on another one; for instance, all
+|Numeric| instances can be |read|, at least from integers:
+\begin{lstlisting}
+  implicit def numericIsRead[N](implicit numN: Numeric[N]): Read[N] = 
+    new Read[N] {
+      def read(s: String) = numN.fromInt(s.toInt)
+    }
+\end{lstlisting}
+
+\begin{lstlisting}[style=floating, label={lst:read_wrapper},
+  caption={Wrapper object for the \lstinline|Read| type class.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/Read.scala}}]
+  implicit class StringReadOps(val self: String)
+  {
+    def readAs[T](implicit readT: Read[T]): T = readT.read(self)
+  }
+\end{lstlisting}
+
+In this form, method calling looks seamless and unsuspicious, but there is still an overhead
+involved every time the operations are actually used on values. For this purpose, type classes often
+provide wrapper objects (see \autosubref{sec:extensions}) with operations for objects that can be
+used as first argument of a method of a type class. The names of these often end with |*Ops|. For
+the |Read| example, such a wrapper object is shown in \autoref{lst:read_wrapper}. In this form, the
+explicit mentioning of |implicit| parameters is constrained to a minimum, and type classes can be
+used as if they just provided the right methods on the right types~-- all without inheritance:
+\begin{lstlisting}
+  def readAll[T: Read](l: List[String]): List[T] = l map _.readAs[T]
+\end{lstlisting}
+This example uses one more feature to fully eliminate mentioning the implicit passing: |T| is
+constrained by a \emph{context bound}, since we do not need the witness object itself
+anymore. Context bounds are automatically converted by the compiler to implicit parameters, and come
+very close to the type class syntax of Haskell. Still, they require more effort at the side of the
+library, in that for seamless usage, an |Ops|-wrapper has to be written (otherwise, the user of the
+type class can always obtain the witness explicitly by the prelude function
+|implicitly[T]|~\cite[][Chapter~12.5]{odersky2014:scala_spec}).\label{ops}
+
+Furthermore, there is one more thing type classes allow: They can be \enquote{stacked}, which means
+using a type class constraint inside the definition of another instance. For example, when we want
+provide a |Read| instance for maps, a suitable definition would have the following signature:
+\begin{lstlisting}
+  implicit def mapIsRead[K, V](implicit readK: Read[K],
+                               readV: Read[V]): Read[Map[K, V]]
+\end{lstlisting}
+The implicit witness for the wrapping type requires itself a witness for the contained key and value
+types. Note that this \enquote{stacking} of implicits does not fall under the rules of implicit
+scope resolution for values, which allow only one level of implicit wrapping~-- chains of implicit
+parameter requirements are followed arbitrarily deep.
+
+\newthought{The type class pattern}, as over-complicated as it may sound on first sight, is not only
+a syntactic trick. It has the following actual semantic advantages over trait inheritance when it
+comes to code architecture:
+\begin{itemize}
+\item It does not only allow separating interface from implementation, but also separation of
+  \emph{data implementation} (of the class that implements the interface) and \emph{functionality
+    implementation}~-- most additional functions and combinators provided by the type class can have
+  their own, third place. This leads to a second property:
+\item Type classes allow to extend types independently of their declaration. That means, a type
+  class implementation can always be added at a later time, and somewhere different from the
+  original class. In that way, the provide a kind of \enquote{interface for extension methods}.
+\end{itemize}
+
+But type classes are also strictly more expressive than conventional subtyping
+polymorphism~\cite{wadler1989:ad-hoc}. Consider a hypothetical trait for a semigroup:
+\begin{lstlisting}
+  trait Semigroup {
+    def plus(other: Semigroup): Semigroup
+  }
+\end{lstlisting}
+First, with this idea, every type being a semigroup would have to be declared as such at its
+definition, by inheriting from the trait~-- there would be no way of \enquote{saying that
+  later}. But more importantly, this code does not even correctly capture the functionality we want
+to have, since it operates only on the |Semigroup| base type~-- and by subtyping, the respective
+parameters can also be in every other semigroup. The operation could not even be implemented
+properly in an inheriting class, since the parameter type is too general to access specific members
+of |this|. This problem is known (remember the peculiarities of defining an |equals| method!), and
+has lead to a solution using generics (or templates), known under the name \enquote{curiously
+  recurring template pattern}~\cite{coplien1995:template}, in which a type inherits from an
+interface with itself as a parameter (like |AddableInt extends Semigroup<AddableInt>|). This still
+is somehow tedious and does not resolve all issues; in particular, it still cannot express a type
+class like the following:
+\begin{lstlisting}
+  trait Monad[M[_]] {
+    def pure[A](a: A): M[A]
+    def join[A](mma: M[M[A]]): M[A]
+  }
+\end{lstlisting}
+This is because neither of |Monad|'s methods are properly expressible as methods of some |Monad|
+object~-- |pure| is a factory, which should probably be a static method; and |join| can only operate
+on objects of \emph{nested} monad type, requiring a form of constraining |this|, which is not
+possible to express in Scala (or the \abbrev{JVM} in general).
+
+From this we see that, while traits only allow to specify methods of the form %
+\lstinline[mathescape,style=inline]|T => X$_1$ => $\cdots$ => X$_n$|, where |T| is the base type,
+type classes can specify an interface with functions where the constrained type occurs multiple
+times and at any position.
+
+Examples of type-class based libraries \enquote{in the wild} are
+Spire\footnote{\protect\githubcommit{https://github.com/non/spire}{/tree/c4202668bf71e4b0b2bf694b15d9011c97c3874d}
+  (visited on 2015-06-03).}, which is a numerics library using type classes to form a mathematical
+hierarchy of algebraic constructs (such as semigroup \(\rightarrow\) monoid \(\rightarrow\) group
+\(\rightarrow\) semiring), and to abstract out kinds of \enquote{number types}, like integral
+numbers, rationals, or complex numbers. In a similar direction goes
+Algebird\footnote{\protect\githubcommit{https://github.com/twitter/algebird}{/tree/8e4270b440c9dc0361f07f216f9cf5f064b32f86}
+  (visited on 2015-06-03).}, which utilizes mostly monoids and semigroups to implement various
+algorithms with generalized matrices on map-reduce style platforms.
+
+
+%--------------------------------------------------------------------------------
+\section{Combinator Interfaces}
+\label{sec:combinators}
+
+The extensive use of combinators (infix functions, mostly symbolic ones, to shorten expressions) for
+\dsls{} has probably been popularized by Haskell. The reason for exactly this language can be found
+in the theoretical background of its inventors and users, which for the most part are strongly
+influenced by mathematics and tend to apply similar symbolic conciseness to programming. But the
+\enquote{philosophy} behind combinator interfaces is not (only) to replace function names and method
+calls by (often cryptic) symbols; rather, they try to factor out certain kinds of patterns and
+provide a succinct way of writing them. Such patterns are those for which traditional inline
+notations exist. Most prominently, this is the mathematical notation for calculations containing
+things like vectors or matrices; however, there are other patterns, such as pipe-and-filter (known
+from \abbrev{UNIX} shells), or grammar notations, like regular expressions or the Backus-Naur-Form.
+
+\begin{lstlisting}[style=floating, label=lst:lenses, language={[Modern]Haskell},
+  caption={Usage example of lenses, a popular pattern for purely functional structural
+    traversal/modification in Haskell, which utilizes an extreme variety of combinators. The
+    \lstinline|(.)| operator is nothing more than regular function composition; using it, various lenses
+    are combined to \enquote{focus} on the part of interest, on which then the function \lstinline|succ|
+    is applied.\protect\footnotemark}]
+  -- Increments all of the major versions of an array of JSON objects.
+  someString ^.. _JSON        -- a parser/printer prism
+  . _Array       -- another prism
+  . traverse     -- a traversal (using Data.Traversable on Aeson's Vector)
+  . _Object      -- yet another prism
+  . ix "version" -- a traversal across a "map-like thing"
+  . _1           -- a lens into a tuple (major, minor, patch)
+  %~ succ        -- apply a function to our deeply focused lens
+\end{lstlisting}
+
+Starting from these patterns, and equipped with a frictionless treatment of operators as functions,
+there has since long been established a common \enquote{basic set} of operators in the Haskell
+standard library~-- not only for \dsls{}. These have layed the basic and inspiration for many other
+libraries using combinators. %
+\footnotetext{Example taken from
+  \protect\url{https://www.fpcomplete.com/user/tel/a-little-lens-starter-tutorial} (visited on
+  2015-06-04).}%
+A very good example of extremely rich Haskell combinators is the Lens
+package,\footnote{\protect\url{http://hackage.haskell.org/package/lens} (visited on 2015-06-04). A
+  very good point of overview is
+  \protect\href{http://hackage.haskell.org/package/lens-4.11/docs/Control-Lens-Lens.html}{\textcolor{black}{\lstinline[columns=fixed]|Control.Lens.Lens|}},
+  which already contains exotically-looking combinators like
+  \lstinline[keywordstyle=\color{black}]|(<<\%@~)|.} which provides combinators for generalized
+getters, setters and modifiers for nested data structures. In \autoref{lst:lenses}, an example of
+its usage is shown: the code there describes a way to modify the major version number of a given
+\abbrev{JSON} object.
+
+In Scala, the language often does not allow (or at least makes very impractical) such an extreme use
+of combinators as in Haskell (this is due to the restrictions of how precedence of operators is
+determined (\cf \autopageref{operators}), and to the lack of automatic currying). Nevertheless,
+there are places and applications where they turn out to be useful and are commonly employed. One
+such application is parser combinators. These have been popularized first by Haskell's efficiently
+implemented Parsec
+library~\cite{leijen2001:parsec}\footnote{\protect\url{http://hackage.haskell.org/package/parsec}
+  (visited on 2015-06-04).}, but have since been ported to various other languages~-- including
+Scala, where they are available as a separate module
+|scala-parser-combinators|\footnote{\protect\url{http://www.scala-lang.org/files/archive/api/2.11.x/scala-parser-combinators/\#package}
+  (visited on 2015-06-05).}.
+
+In \autoref{lst:parser}, an example of its usage is shown for a simple grammar for
+\abbrev{LISP}-style S-expressions (which look like |(foo (cons 0 '(1 2 3)) (bar ()))|). Like in a
+\abbrev{BNF} grammar, nonterminals are given their own names; they are implemented as individual
+|Parser| objects mutually calling each other. These nonterminal-parsers are then combined with each
+other and primitive parsers for terminals, using a range of operators, many of which have mnemonic
+names; for example, the expression
+\begin{lstlisting}
+  whiteSpace.? ~> (readMacro | cons | atom)
+\end{lstlisting}
+means \enquote{parse optional whitespace, discard it, then apply whichever of
+  \lstinline[style=inline]|readMacro|, \lstinline[style=inline]|cons| and
+  \lstinline[style=inline]|atom| succeeds, and return its result}~-- this uses a mixture of
+\abbrev{BNF} alternation with \lstinline[style=inline]{|}, the regex \enquote{optional} modifier
+|?|, and Haskell's left-discarding applicative combinator, which originally is |*>|, but has been
+changed to |~>| in Scala, where it is also congruent with the sequencing operator |~|. 
+
+\begin{lstlisting}[style=floating, label=lst:parser,
+  caption={Parser for a simple S-expression syntax for \abbrev{LISP}, including quotes. The
+    \lstinline|\^\^| combinator is essentially (\lstinline|f|)\lstinline|map|~-- it lifts a function
+    to transform the result of a successful parser.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/SExpParser.scala}}]
+  object SExpParser extends RegexParsers {
+    override val skipWhitespace = false
+
+    def sexpr: Parser[SExpr] = whiteSpace.? ~> (readMacro | cons | atom)
+
+    def readMacro: Parser[SExpr] = 
+      (readMacroIdentifier ~ sexpr) <~ whiteSpace.? ^^ {
+        case s~e => ReadMacro(s, e)
+      }
+    def cons: Parser[SExpr] = 
+      parenthesized(rep(sexpr) ^^ ConsList) <~ whiteSpace.?
+    def atom: Parser[SExpr] = (identifier ^^ Atom) <~ whiteSpace.?
+
+    def parenthesized[T](p: Parser[T]) = 
+      "(" ~ whiteSpace.? ~> p <~ whiteSpace.? ~ ")"
+    def identifier: Parser[String] = "[^()' ]+".r
+    def readMacroIdentifier: Parser[String] = Quote.macroCharacter
+  }
+\end{lstlisting}
+
+In contrast to traditional \abbrev{BNF}, it is also possible to define \enquote{parametrized
+  symbols} in the form of functions (such as |parenthesized|). This is an important point. Contrary
+to specialized, external languages (in this case, parser generators such as \abbrev{ANTLR}),
+embedded combinator libraries have the advantage of and should be designed to being able to interact
+with the surrounding language \emph{inline}. This is not only done by using language constructs to
+form new parsers (parser-transformers like |parenthesized|), but also by being able to embed Scala
+in parsers with function combinators like |^^|. In that way, parser combinators are an excellent
+example of \abbrev{SICP}'s principles of metalinguistic abstraction: they neatly combine means of
+abstraction, combination, and factoring out patterns, by seamlessly interacting with the
+functionalities of the host language.
+
+When designing a combinator interface in Scala, not only the conciseness of expressions should be
+respected, but also the conventions and habits of the users of the language. For example, while in
+Haskell the |atom| parser might be expressed as
+\begin{lstlisting}[language={[Modern]Haskell}]
+  Atom <$> identifier <* optional whitespace
+\end{lstlisting}
+this is rather impractical in Scala, since the higher-order application would not work in expected
+ways. Instead, using |^^| with an anonymous function is the preferred way to map over a parser. On
+the other hand, the usage of methods for changing parsers, like in |whitespace.?|, is not easily
+possible in Haskell, but quite effortless in Scala, and forms thus a good way of modifying
+combinators. The same would also work in |cons| (line~10), where |rep(sexpr)| could also be written
+as |sexpr.+|; but the tradeoff between symbolic names and static functions in a case like this is
+more one of personal style. In general, a good solution would probably take into account both
+backgrounds and provide method-style as well as combinator-style parts of the interface, allowing
+the user to choose a suitable mixture.
+
+% $ prevent emacs from not hightlighting the rest...
+
+%--------------------------------------------------------------------------------
+\section{Objects and Modules, Mixins and Cake}
+\label{sec:modules}
+
+This subsection's purpose is to introduce a few practical notions of modularization and organization
+of code parts. They are the most important concepts for this used in Scala, and shown here in order
+to demonstrate how a good \enquote{user experience} for a library can be constructed; besides, also
+some specific tricks using traits are shown, which are examles of how to provide modularized and
+customizable behaviour for classes.
+
+\newthought{As it was stated in the introduction}, Scala has a highly sophisticated module
+concept~-- in this respect, it allows much more flexibility than many other languages. Still, the
+underlying building block of this system is just one thing: the |object| construct. An |object| is
+basically just a syntactic sugar for declaring a singleton instance of some class at top level, with
+the convenience of having the same syntax as a class. However, |object| declarations have really
+more power than plain instances; most importantly
+\begin{itemize}
+\item every |object| forms a \emph{module}~-- a separate namespace, that can be |import|ed
+  otherwhere, but can also contain its own state; furthermore,
+\item |object|s can be used as \emph{companion objects} for classes or traits, in which case their
+  members generalize the notion of static members known from other languages; and finally,
+\item \emph{package objects} can be used to provide free functions and objects at the top level of a
+  package, which are automatically available at import.
+\end{itemize}
+In the following, the term \enquote{object} will mostly denote such singletons declared by |object|,
+not just arbitrary instances.
+
+In the first, simple variant, objects can be used to modularize small pieces of code, without having
+to use the package system. This is useful if one wants to provide helper methods or implicits to be
+used for a specific \dsl{}, and provide them in an extra namespace. It can also be used to bundle
+features in a kind of \enquote{overlapping} module~-- Scala has no explicit notion of exporting from
+a package (everything that is not marked as package private, is considered public), so sometimes it
+is practical to collect a range of members in an object and relay their definitions to other
+namespaces, in that way providing a combined reexport.
+
+A further common pattern for this use case is to separate code using traits. Since traits, unlike
+interfaces, are not necessarily something purely abstract, but can be fully concrete, they are often
+used to just split parts of an implementation (logically belonging together) into multiple internal
+parts, and mix them together into one final exported object~-- which in the most extreme case does
+not even need to contain any other code. A perfect example of this is the organization of the Scalaz
+library.\footnote{\protect\githubcommit{https://github.com/scalaz/scalaz}{/tree/24cf7f3dcf9baa9ea438269eea6b24fd9476a544}
+  (visited on 2015-05-16).} Scalaz is a very rich package, but tries to allow very granular import
+behaviour; every part of its functionality can be imported separately (\eg, %
+|import scalaz.Id._|). However, if one wants to bring into scope the full range of features, one
+only needs to import two things:
+\begin{lstlisting}
+  import scalaz._
+  import Scalaz._
+\end{lstlisting}
+The first one is the package itself, which contains mostly type synonyms and some very basic
+instances; the second line, importing |Scalaz._|, imports the members of the object listed in
+\autoref{lst:scalaz}: this object has no own members, but accumulates the members of seven other
+traits providing all kinds of general functionality contained in the library, from syntactic helpers
+to type class instances for standard library types.
+
+\begin{lstlisting}[style=floating, label=lst:scalaz, 
+  caption={The definition of the \texttt{Scalaz} object (defined in file
+    \protect\href{https://github.com/scalaz/scalaz/blob/f7256ad19bf2bf92756d2c3168ed643aad07d356/core/src/main/scala/scalaz/Scalaz.scala}{\nolinkurl{scalaz/core/src/main/scala/scalaz/Scalaz.scala}}),
+    collecting functionality from a range of implementation traits.}]
+  object Scalaz
+    extends StateFunctions        
+    with syntax.ToTypeClassOps    
+    with syntax.ToDataOps         
+    with std.AllInstances         
+    with std.AllFunctions         
+    with syntax.std.ToAllStdOps   
+    with IdInstances              
+\end{lstlisting}
+
+\newthought{If the set of helpers is specific} to a certain class or trait, it can be put in the
+\emph{companion object} of that class. Such an object must have the same name and be defined in the
+same file as the companion class. Defining members in the companion has the advantage that they then
+have access to the private members of the class; in that way, companions incorporate everything that
+would be |static| in Java. Additionally, the companion object is taken into account for implicit
+scope resolution, so it makes sense to define known type class instances there.
+
+\begin{lstlisting}[style=floating, label=lst:church, 
+  caption={An implementation for polymorphic Church encoded lists. The \texttt{apply} and 
+    \texttt{unapply} methods are the only way to construct and deconstruct them; from a 
+    more theoretical point of view, they form the isomorphism between \texttt{ChurchList[T]}
+    and the builtin \texttt{List[T]}. \texttt{Empty} is defined as a dedicated object to allow
+    sharing and to make pattern matching look more natural.
+    \hfill\github{dsl-examples/blob/master/src/main/scala/dsl_examples/ChurchList.scala}}]
+  sealed trait ChurchList[+T] {
+    def fold[K]: K => (T => K => K) => K
+  }
+
+  object ChurchList {
+    def apply[T](l: T*): ChurchList[T] = l.toList match {
+      case Nil => Empty
+      case x::xs => new ChurchList[T] {
+        val rest = ChurchList[T](xs: _*)
+        def fold[K]: K => (T => K => K) => K =
+          nil => plus => plus(x)(rest.fold(nil)(plus))
+      }
+    }
+    
+    def unapplySeq[T](l: ChurchList[T]): Option[Seq[T]] = 
+      Some(l.fold[List[T]](Nil)(x => xs => x::xs))
+  }
+
+  object Empty extends ChurchList[Nothing] {
+    def fold[K] = nil => _ => nil
+  }
+\end{lstlisting}
+
+A common pattern for implementing factories in Scala is to use the companion object for construction
+and destruction; that is, to define |apply| and |unapply| there, and hide the actual (maybe more
+complicated) implementation from the user. This has the additional benefit that the implementation
+can later be swapped without interface changes. An example for such an implementation is shown in
+\autoref{lst:church}; this uses a rather unusable underlying implementation of lists, which
+nevertheless can be used in a normal way via the companion object:
+\begin{lstlisting}[style=break-lines]
+  scala> ChurchList(1, 2) match { case ChurchList(x, xs) => s"Full: Cons($x, $xs)"; case Empty => "Empty!" }
+  res0: String = Full: Cons(1, 2)
+
+  scala> ChurchList() match { case ChurchList(x, xs) => s"Full: Cons($x, $xs)"; case Empty => "Empty!" }
+  res1: String = Empty!
+\end{lstlisting}
+The definition of its behaviour is part of the sealed trait |ChurchList|, but the contents can only
+be accessed through the static methods from the companion (|sealed| prevents implementing the trait
+from elsewhere than the defining file, thus preventing \enquote{direct} creation without the factory
+methods).
+
+The third form of modularization throught objects are package objects. They are usually defined in a
+separate file in the package's directory, called \texttt{package.scala}, and differ in their
+definition only by the additional keyword |package|; as an example, consider again an according
+(greatly simplified) definition in Scalaz%
+\footnote{%
+  \protect\href{https://github.com/scalaz/scalaz/blob/0bebf537f1b37588143d303732d6a8dfbe1ef061/core/src/main/scala/scalaz/package.scala}{\nolinkurl{https://github.com/scalaz/scalaz/blob/series/7.2.x/core/src/main/scala/scalaz/package.scala}},
+  simplified (visited on 2015-11-26).}:
+\begin{lstlisting}[mathescape]
+  package object scalaz {
+    import Id._
+    implicit val idInstance: Traverse[Id] with ... with Cozip[Id] = Id.id
+    type Tagged[T] = { type Tag = T }
+    type @@[T, Tag] = T with Tagged[Tag] 
+    $\vdots$
+  }
+\end{lstlisting}
+The contents of package objects are always imported when the respective package name is imported,
+and provide top-level \enquote{free definitions}. Usual contents of them are type synonyms, which
+are desired to be avaliable globally (since |type| declarations are only allowed within classes or
+objects), and widely used implicits for the package. Often, they also contain various small helpers
+such as wrappers or functions intended to be used frequently, which are not considered complex or
+important enough to deserve their own files or modules.
+
+\newthought{Besides these patterns using objects}, there are also a variety of useful things that
+can be done with traits, other than using them simply as interfaces. One of the common usages has
+already been mentioned, namely, the splitting of code among several implementation traits. A variant
+of this is providing helper methods and implicits to be used with a class or type class in an own
+trait, and mix that into the class itself or the package object. That way, all utility functions
+using some type are always imported together with it (these are often found in combination with type
+classes' |Ops|-wrappers mentioned on \autopageref{ops}).
+
+Other patterns using traits concern methods of modularizing optional behaviour of classes. This is
+often wished when there is one \enquote{main} class, providing a basic behaviour or functionality by
+inheritance, and multiple additional features for it, which are however optional. The conventional
+way to solve such a scenario would be an \abbrev{OOP} pattern like Decorator; however, all these are
+subsumed under traits.
+
+There are two ways to conveniently provide \enquote{decoration traits}, both of which rely on a
+stronger coupling between the trait and the basic class that mere implementation traits. One variant
+is to give a trait a \emph{self-type annotation}:
+\begin{lstlisting}
+  class A {
+    def modifyString(s: String) = s * 2
+  }
+
+  trait T { this: A => 
+    def modifyAllStrings(ss: Seq[String]) = ss map (modifyString(_))
+  }
+\end{lstlisting}
+Such an annotation consists of the statement |this: A =>| at the beginning of the body, which means
+that \enquote{the type of \texttt{this} must be \texttt{A} (or a subtype thereof)}. In this way, |T|
+can refer to |A|'s public methods as its own, since it \enquote{knows} that the resulting actual
+type will always be an |A|:
+\begin{lstlisting}
+  scala> (new A with T).modifyAllStrings(List("sdf", "ab", ""))
+  res0: Seq[String] = List(sdfsdf, abab, "")
+\end{lstlisting}
+This kind of mixin is useful when providing additional features to a class, such as testing methods,
+or special optional syntax. Combining this with leaving members abstract in the \enquote{main}
+class, this pattern is frequently used for dependency injection and known as \emph{cake pattern},
+since it constructs a final implementation out of a variety of available layers (such as logging,
+testing, persistence, \ldots).
+
+Traits with self-type annotations however cannot influence the basic behaviour that was
+\enquote{already there}. For that purpose, a more sophisticated kind of mixins can be employed: this
+second variant is a bit more interesting from an object-oriented perspective. It exploits the fact
+that Scala trait inheritance uses \emph{dynamic super-type resolution}. That is, when mixing traits
+from an inheritance hierarchy, behaviour can not only be stacked, but overridden in a well-defined
+manner. Consider the following trait, continuing the example from above:
+\begin{lstlisting}
+  trait Logging extends A {
+    override def modifyString(s: String) = { 
+      println(s"[Log] Old string was: $s")
+      super.modifyString(s)
+    }
+  }
+\end{lstlisting}%$
+If we now say
+\begin{lstlisting}
+  scala> (new A with Logging).modifyString("sdf")
+  [Log] Old string was: sdf
+  res0: String = sdfsdf
+\end{lstlisting}
+we see that the old behaviour has in fact be extended with the trait. This can be used to combine
+multiple available behaviours in a \enquote{vertical} way, instead of only \enquote{horizontally},
+as with the first variant~-- the different implementations are added above each other. The dynamic
+mixin inheritance provided by Scala is a practical and powerful alternative to other styles of
+multiple inheritance. It differs from most other approaches by the fact that calls to |super| are
+not resolved at the place where they appear~-- rather, in the final object, all mixed-in traits are
+\emph{linearized} according to a specified order, which is then used to resolve the call
+\cite[][Chapter~12.6]{odersky2008:programming}.
+
+\newthought{The relation of all these patterns to \dsls} is the fact that they can be used to
+provide a much more natural interface for \dsls{} which are thought to be implemented as classes. A
+common way to design a library for this is to have an abstract class containing the basic
+functionality, and intend it to be extended on a case-by-case basis. So, for one specific instance
+of the usage of the functionality, the user would create a new subclass or even subobject, and
+implement the concrete behaviour in the body of the class (either in the primary constructor, or by
+implementing abstract members). Then, additional functionality can be provided via mixins; this can
+range from mixing in the actual \dsl{} syntax to just adding some debug functionality.
+
+A nice example of this kind of interface is shown by the Akka
+library,\footnote{\protect\url{http://doc.akka.io/docs/akka/2.3.11/scala.html} (visited on
+  2015-06-23).} which superseded Scala's earlier actor implementation in the standard library. To
+define an Akka actor, one usually creates a subclass of |Actor|, and implements the |receive| method
+there:
+\begin{lstlisting}
+  class PingPong extends Actor {
+    def receive = {
+      case Ping => sender() ! Pong
+    }
+  }
+
+\end{lstlisting}
+
+The basic thing an actor does is to receive input messages, and process them by doing something to
+its internal state or sending messages to other actors. However, there's much more features
+available in Akka. While many of these can be configured via properties or members, there's a range
+of mixed-in behaviour for special |Actor|s:
+\begin{itemize}
+\item |Actor with ActorLogging| turns on the default logging mechanism for actor
+  systems, which is useful for debugging.
+\item |Actor with Stash| extends the default message box behaviour such that messages can be
+  \enquote{put aside} currently (\enquote{stashed}), and treated again later.
+\item |Actor with RequiresMessageQueue[BoundedMessageQueueSemantics]| (or with some other semantics)
+  changes the way the message box of the actor is handled; this is a generalization of the behaviour
+  found in |Stash| (which is a subtrait of |RequiresMessageQueue[DequeBasedMessageQueueSemantics]|).
+\item |Actor with FSM[State, Data]| mixes in another \dsl{}, providing an additional wrapper over
+  |receive| and allowing actors to be defined as Finite State Machines, reacting to input messages
+  and updating their internal state according to the current state.
+\end{itemize}
+The last point is an especially interesting one, since this way of providing \dsl{} syntax is very
+similar to the design used in the practical part of this work: a completely new layer of syntax is
+mixed in, with new \enquote{statements} to be used in the primary constructor, which then internally
+call the underlying implementation (in the case of actors, |receive|).
+
+% How this looks like in contrast to
+% a regular actor is shown in \autoref{lst:fsm}.
+
+% \begin{lstlisting}[style=floating, label=lst:fsm,
+%   caption={FSM\protect\footnotemark}]
+%     class PingPont extends Actor with FSM[State, Data] {
+%       startWith(Idle, Record(pings = 0, pongs = 0))
+     
+%       when(Pinging) {
+%         case Event(Ping, record) =>
+%           goto(Ponging) using record.copy(pings = record.pings + 1)
+%       }
+     
+%       when(Ponging, stateTimeout = 1 second) {
+%         case Event(Pong, record) =>
+%           goto(Pinging) using record.copy(pongs = record.pongs + 1)
+%       }
+
+%       initialize()
+%     }
+% \end{lstlisting}
+
+% How this looks like in contrast to
+% a regular actor is shown in \autoref{lst:fsm}.
+
+% \begin{lstlisting}[style=floating, label=lst:fsm,
+%   caption={FSM\protect\footnotemark}]
+%     class Buncher extends Actor with FSM[State, Data] {
+%       startWith(Idle, Uninitialized)
+     
+%       when(Idle) {
+%         case Event(SetTarget(ref), Uninitialized) =>
+%           stay using Todo(ref, Vector.empty)
+%       }
+     
+%       when(Active, stateTimeout = 1 second) {
+%         case Event(Flush | StateTimeout, t: Todo) =>
+%           goto(Idle) using t.copy(queue = Vector.empty)
+%       }
+     
+%       whenUnhandled {
+%         case Event(Queue(obj), t @ Todo(_, v)) =>
+%           goto(Active) using t.copy(queue = v :+ obj)
+%       }
+     
+%       initialize()
+%     }
+% \end{lstlisting}
+% \footnotetext{Incomplete example taken from
+%   \protect\url{http://doc.akka.io/docs/akka/2.3.11/scala/fsm.html} (visited on 2015-06-24); this
+%   code is simplified and slightly modified, and the \texttt{State} and \texttt{Data} types are left
+%   out.}
+
+From these examples we can see that providing an interface using mixins in this style does not only
+allow a user to finely choose what behaviour or variation thereof is wanted, but also give them
+choice over what style of \dsl{} is wanted or needed. A more extreme example of this style is
+ScalaTest~-- this library considers itself a \enquote{test toolkit}, and provides a wide selection
+of classes and traits to be combined. Its philosophy is to \enquote{source out} every aspect of
+testing into its own module (for example, underlying test platform, kind of testing, specification
+syntax, documentation creation, and so on), and allow the tester to combine all these freely into
+what fits them:\footnote{Example taken from
+  \protect\url{http://www.scalatest.org/user_guide/defining_base_classes} (visited on 2015-06-24).}
+\begin{lstlisting}
+  abstract class UnitSpec extends FlatSpec with Matchers with
+    OptionValues with Inside with Inspectors
+\end{lstlisting}
+This class does not need a body, all its functionality and style choices are mixed in; it will just
+be used as a base class for all unit test modules in this project. (A larger example of ScalaTest
+has already been shown in \autoref{lst:scalatest}.)
+
+% Unified import behaviour (esp. with traits), \enquote{*Ops}-patterns and code organization with
+% traits, companion objects, default constructors. Cake pattern, polymorphic embedding.
+% 
+% Implementation providers, behaviour stacking \& merging. Self-types and path-dependent types.
+
+
+% %--------------------------------------------------------------------------------
+% \section{Faking the Imperative}
+% \label{sec:imperative}
+
+% In this final pattern section, a few of the features described above will be combined into a \dsl{}
+% for finite state machines, to illustrate their working together, and to show how Scala syntax allows
+% to provide a library interface looking like actual syntactic constructions just by exploiting the
+% various possibilities provided. This example will combine curried methods, call-by-name, partial
+% functions and blocks, to fake the look of an actual imperative language. The inspiration for this
+% has been taken from the |FSM| trait from the Akka actor
+% library\footnote{\protect\url{http://doc.akka.io/docs/akka/2.3.11/scala/fsm.html} (visited on
+% 2015-06-23).}.
+
+
+%%% Local Variables: 
+%%% TeX-master: "document"
+%%% End:

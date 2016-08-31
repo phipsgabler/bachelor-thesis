@@ -1,0 +1,476 @@
+\documentclass{beamer}
+%\usepackage[osf,biolinum]{libertine}
+\usepackage{tgheros}
+\usepackage[varqu]{inconsolata}
+\usepackage{../packages/mylistings}
+\usepackage{csquotes}
+
+\usepackage{tikz}
+\usepackage{tikz-uml}
+
+%\usecolortheme{beaver}
+
+\lstset{
+  language=Scala,
+  %style=blackwhite
+  style=colored,
+  %belowskip=0pt
+  basicstyle=\ttfamily\small,
+  columns=[c]fixed
+}
+
+\usetheme[compress]{Singapore}
+\setbeamercolor{structure}{fg=textblue}
+
+
+\author{Philipp Gabler}
+\title{Designing Embedded\\ Domain-Specific Languages\\ in Scala\\
+  {\small\itshape A Case Study with Action Systems}}
+\date{2015-06-17}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{document}
+
+\begin{frame}
+  \maketitle
+\end{frame}
+
+\section{Introduction}
+\subsection{Intro}
+
+\begin{frame}
+  \frametitle{Overview of the work}
+  \begin{block}{Exploring Scala's capabilities for embedded DSLs}
+    \begin{itemize}
+    \item What helpful features and techniques are there?
+    \item How (far) can they be used, and what are their limits?
+    \item Some examples of their usage: explanatory and \enquote{in the wild}
+    \end{itemize}
+  \end{block}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Overview of the work}
+  \begin{block}{Construct a DSL for the Action Systems used in model-based mutation testing}
+    \begin{itemize}
+    \item How does the process of development with this goal look like?
+    \item Where does the language help with the embedding, and where does is stand in our way?
+    \item What features are missing, and what could have been done better (in other languages, or
+      with different means)?
+    \end{itemize}
+  \end{block}
+\end{frame}
+
+\section{Scala}
+
+\subsection{Intro}
+
+\begin{frame}
+  \frametitle{\enquote{Regular} language features}
+  \begin{itemize}
+  \item Completely object oriented (no strange \enquote{primitive types})
+  \item Functional: immutability preferred, proper closures and lambdas
+  \item Powerful type system: bounded polymorphism done right, with higher kinds; structural types
+  \item Traits: better interfaces, mixin inheritance
+  \item Sophisticated modules, ADTs + pattern matching, monad comprehensions,\ldots
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Not so regular features (a selection)}
+  \begin{itemize}
+  \item Operators: Inline calls and proper expressions
+  \item Empowered function calling: blocks and by-name args
+  \item Implicits: Extension wrappers and less boilerplate
+  \item Extractors (pattern synonyms/active patterns), interpolators, macros\ldots
+  \end{itemize}
+\end{frame}
+
+
+\subsection{Operators}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=6}
+  \frametitle{Expressions that look like expressions}
+  \begin{block}{Java}
+    \begin{lstlisting}[language=Java]
+      // not so logical...
+      Expr e1 = new Or(new Var("a"), 
+                       new And(new Var("b"), 
+                               new Not(new Var("c"))));
+    \end{lstlisting}
+  \end{block}
+  \begin{block}{Scala}
+    \begin{lstlisting}
+      // as simple as that!
+      val e1: Expr = "a" || "b" && !"c"
+    \end{lstlisting}
+  \end{block}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Expressions that look like expressions}
+  
+  The magic behind it:
+  \begin{lstlisting}
+    def ||(other: Expr) = Or(this, other)
+    def &&(other: Expr) = And(this, other)
+    def unary_! = Not(this)
+    implicit def stringToExpr(s: String): Var = Var(s)
+  \end{lstlisting}
+  Also not much more code than Java variant.
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Combinators!}
+  \begin{lstlisting}
+    def identifier: Parser[String] = "[^()' ]+".r
+    def readMacroIdentifier: Parser[String] = "'"
+
+    def atom = (identifier ^^ Atom) <~ whiteSpace.?
+
+    def cons =  
+      (parenthesized(sexpr.*) ^^ ConsList) <~ whiteSpace.?
+
+    def readMacro = (readMacroIdentifier ~ sexpr) <~ 
+      whiteSpace.? ^^ { case s~e => ReadMacro(s, e) }
+
+    def sexpr = whiteSpace.? ~> (readMacro | cons | atom)
+  \end{lstlisting}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4} \frametitle{\enquote{Natural language
+      interface}\footnote{\scriptsize\protect\url{http://www.scalatest.org/}}}
+  \begin{lstlisting}
+    class ExampleSpec extends FlatSpec with Matchers {
+      "A Stack" should "behave right" in {
+        val stack = new Stack[Int]
+        stack.push(1)
+        stack.push(2)
+        stack.pop() should be (2)
+        stack.pop() should be (1)
+      }
+
+      it should "throw NoSuchElementException" in {
+        val emptyStack = new Stack[Int]
+        a [NoSuchElementException] should be thrownBy {
+          emptyStack.pop()
+        } 
+      }
+    }
+  \end{lstlisting}
+\end{frame}
+
+
+\subsection{Blocks}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=6}
+  \frametitle{Blocks \& by-name args I}
+  \begin{block}{Defining this\ldots}
+    \begin{lstlisting}[language=Java]
+      def _while(condition: => Boolean)(body: => Unit): Unit = {
+        if (condition) { body; _while(condition)(body) }
+      }
+    \end{lstlisting}
+  \end{block}
+  \begin{block}{\ldots we get this!}
+    \begin{lstlisting}
+      var x = 10
+      _while(x > 0) {
+        print(x)
+        x -= 1
+      }
+      // 10987654321
+    \end{lstlisting}
+  \end{block}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=6}
+  \frametitle{Blocks \& by-name args II}
+  This has also very practical semantics:
+  \begin{block}{Java}
+    \begin{lstlisting}[language=Java]
+      Socket socket = new Socket("example.com", 80);
+      try { 
+        socket.getOutputStream().write("GET".getBytes());
+      } catch (IOException e) { ... }
+      // what should we return? null?
+    \end{lstlisting}
+  \end{block}
+  \begin{block}{Scala}
+    \begin{lstlisting}
+      val socket = Try(new Socket("example.com", 80))
+      socket map { s => 
+        s.getOutputStream write "GET".getBytes
+      } recover { 
+        case e: IOException => ??? 
+      }
+      // can simply return socket, or better: socket.toOption
+    \end{lstlisting}
+  \end{block}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Blocks \& by-name args III}
+  We even could implement this:
+  \begin{lstlisting}
+    on error in {
+      socket.getOutputStream write "GET".getBytes
+    } resume next
+    // error-free code!
+  \end{lstlisting}
+\end{frame}
+
+
+\subsection{Implicits}
+
+\begin{frame}
+  \frametitle{Implicits}
+  Have you noticed them?
+  
+  No, because you shouldn't!
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Implicits}
+  Patching strings:
+  \begin{lstlisting}
+    trait Read[T] { def read(s: String): T }
+
+    implicit object boolIsRead extends Read[Boolean] {
+      def read(s: String) = s match {
+        case "true" => true
+        case "false" => false
+      }
+    }
+
+    implicit class StringReadOps(val self: String) {
+      def readAs[T](implicit readT: Read[T]): T = 
+        readT.read(self)
+    }
+  \end{lstlisting}
+
+  No more helpers:
+  \begin{lstlisting}
+    "true".readAs[Boolean] 
+    // becomes: StringReadOps("true").readAs[Int](boolIsRead)
+    // which actually is: boolIsRead.read("true")
+  \end{lstlisting}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Implicits}
+  We can even nest this:
+  \begin{lstlisting}
+    implicit def numericIsRead[N](implicit numN: Numeric[N])
+      : Read[N] = new Read[N] {
+      def read(s: String) = numN.fromInt(s.toInt)
+    }
+  \end{lstlisting}
+  \begin{lstlisting}
+    "42".readAs[Int]  
+    // is actually: numericIsRead(intIsNumeric).read("42")
+  \end{lstlisting}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Implicits are present everywhere}
+  \begin{lstlisting}[lineskip=1ex]
+    val duration = 1.second + 42.millis
+    Seq((1,3), (2,1), (1,2)).sorted
+    42 + " is the answer!"
+    sender ! Received(answer)
+  \end{lstlisting}
+  \begin{lstlisting}
+    val f: Future[String] = Future {
+      s + " future!"
+    }
+  \end{lstlisting}
+\end{frame}
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Actium}
+
+\subsection{Introduction}
+
+\begin{frame}
+  \frametitle{Context: Action Systems \& testing}
+  \begin{itemize}
+    \item Back, 1983: description of  distributed sytems, alternative to CSP formalism
+    \item \emph{Processes} can participate in one \emph{action} at a time, if it is enabled
+      (its \emph{guard} is true)
+    \item Now: Action Systems are useful \emph{test models} for \emph{model based testing}
+    \item Specifically: Model based mutation-testing of nondeterministic systems
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Example system}
+  \centering
+  \scriptsize
+  \hspace{1.8cm}
+  \begin{tikzpicture}
+    \usetikzlibrary{positioning}
+    \tikzumlset{font=\scriptsize\sffamily}
+      \umlbasicstate[x=0,y=0,name=Destroyed]{Destroyed}
+      \umlbasicstate[x=4,y=0,name=AirAndOn]{AirAndOn}
+      \umlbasicstate[x=4,y=-2.5,name=GroundAndOn]{GroundAndOn}
+      \umlbasicstate[x=0,y=-2.5,name=GroundAndOff]{GroundAndOff}
+      \umlstateinitial[x=0,y=-4,name=Start]
+      \draw [->] (Start.north) -- (GroundAndOff.south);
+      \draw [->, transform canvas={yshift=+2mm}] (GroundAndOff.east) -- (GroundAndOn.west)
+          node[above, midway]{PowerOn};
+      \draw [->, transform canvas={yshift=-2mm}] (GroundAndOn.west) -- (GroundAndOff.east)
+          node[below, midway]{PowerOff};
+      \draw [->, transform canvas={xshift=+2mm}] (GroundAndOn.north) -- (AirAndOn.south)
+          node[right, midway]{Start};
+      \draw [->, transform canvas={xshift=-2mm}] (AirAndOn.south) -- (GroundAndOn.north)
+          node[left, midway]{Land};
+      \draw [->] (AirAndOn.west) -- ([yshift=-1pt] Destroyed.east) node[above, midway]{Destroy};
+      \draw [rounded corners] ([yshift=-2mm] AirAndOn.east) 
+          -| +(0.6, 0.4) -- ([yshift=2mm] AirAndOn.east) [->];
+      \node [right=0.6cm of AirAndOn.east] {Move(x, y)};
+  \end{tikzpicture}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Reference (existing) syntax}
+  \begin{lstlisting}[language={}]
+    destroy() if mode == Air then
+    {
+      mode := Destroyed;
+      engine := 0;
+    };
+
+    move(x:MyNat, y:MyNat) if mode == Air && engine == 1 then
+    {
+      pos_x := pos_x + x;
+      pos_y := pos_y + y;
+    };
+  \end{lstlisting}
+\end{frame}
+
+\subsection{Implementation}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4,deletestring=[b]'}
+  \frametitle{Implemented syntax}
+  \begin{lstlisting}
+    when('Destroy) given mode === Air then_do (
+      mode := Destroyed,
+      engine := F
+    )
+
+    when('Move('dx, 'dy)) given (
+      mode === Air && engine === T) then_do (
+      pos_x := pos_x + 'dx,
+      pos_y := pos_y + 'dy
+    )
+  \end{lstlisting}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4} 
+  \frametitle{Gherkin
+    example\footnote{\scriptsize\protect\url{https://github.com/cucumber/cucumber/wiki/Gherkin}}}
+  \begin{lstlisting}[language={}]
+    7:   Given some precondition
+    8:     And some other precondition
+    9:    When some action by the actor
+    10:    And some other action
+    11:    And yet another action
+    12:   Then some testable outcome is achieved
+    13:    And something else we can check happens too
+  \end{lstlisting}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=4}
+  \frametitle{Overview of the ActionSystem trait}
+  \begin{lstlisting}
+    trait ActionSystem {
+      // concrete:
+      def run: Stream[Choice]
+      def initialize(assignments: Assignment[State]*): Unit
+      def addAction(action: Action): Unit
+
+      // abstract:
+      type State
+      def chooseAction(actions: Seq[Action]): Option[Action]
+      def chooseParameters(label: Label, 
+                           params: Seq[Variable[State]]) 
+        : Map[Variable[State], State]
+    }
+  \end{lstlisting}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Look of the plain implementation}
+  \centering\Huge
+  \textcolor{textgreen}{Showing code in IDE}
+\end{frame}
+
+
+
+\begin{frame}
+  \frametitle{Properties of the implementation}
+  \begin{itemize}
+  \item The system contains a mutable environment to represent its state
+  \item Actions are represented symbolically by expression ADTs, which are executed at evaluation
+    (deep embedding)
+  \item Running happens by lazily evaluating a \lstinline|Stream[Choice]|, which is defined
+    recursively
+  \item As much semantics as possible is left abstract and can be mixed in; actions only define
+    structure and behaviour, not way of execution
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[containsverbatim]
+  \lstset{gobble=6,deletestring=[b]'}
+  \frametitle{Extra features}
+  \begin{itemize}
+  \item Multiple actions with same name automatically supported (internally kept separate)
+  \item External statements (additionally to assignments):
+    \begin{lstlisting}
+      externally {
+        println(s"E: x = ${'x.value}, y = ${'y.value}")
+        if ('x.value < 0 || 'y.value < 0) {
+          println("Aborting: x < 0 || y < 0.")
+          abort
+        }
+      }
+    \end{lstlisting}
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Possible improvements}
+  \begin{itemize}
+  \item Better Parametrization of choice methods
+  \item Using macros to allow using blocks instead of parameter lists
+  \item Better support for state types (currently mainly ints), and actually use Scala's type
+    system (or Shapeless generics)
+  \item Wildcard parameters \& pattern matching, nested actions
+  \item Make evaluation immutable (currently: stateful updates)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \centering\Huge
+  \textcolor{textgreen}{Thank you!\\[1em] Questions?}
+\end{frame}
+
+\end{document}

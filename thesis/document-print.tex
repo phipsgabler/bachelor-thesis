@@ -1,0 +1,423 @@
+\documentclass[11pt,a4paper,twoside]{memoir}
+\usepackage[final,protrusion,babel]{microtype}
+\usepackage[utf8]{inputenc}
+\usepackage[LGR,T1]{fontenc}
+\usepackage[polutonikogreek,english]{babel}
+\usepackage[style=english]{csquotes}
+\usepackage{xspace}
+\usepackage[final]{graphicx}
+\usepackage[textsize=tiny]{todonotes}
+\usepackage[final,hyperfootnotes=false]{hyperref}
+
+\usepackage{placeins}           % \FloatBarrier
+%\usepackage{float}             % H float placement
+\usepackage[originalcommands]{ragged2e} % improved ragged paragraphs in abstract
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+%\usepackage{pifont}
+\usepackage{fourier-orns}
+
+\usepackage{../packages/typographic_setup}
+\usepackage[final]{../packages/mylistings}
+
+%-------------------------------------------------------------------------------
+% TITLING
+%
+\newcommand{\upinitial}[2]{{\textup{#1}\kern#2}}
+
+\title{Designing Embedded \\ Domain-Specific Languages \\ in Scala} 
+\subtitle{\upinitial{A}{0pt} \upinitial{C}{-0.8pt}ase %
+  \upinitial{S}{-0.8pt}tudy with \upinitial{A}{-0.7pt}ction \upinitial{S}{-1.4pt}ystems}
+
+\author{Philipp Gabler}
+
+\date{}
+
+\hypersetup{
+  pdfinfo={
+    Author={Philipp Gabler},
+    Title={Designing Embedded Domain-Specific Languages in Scala}
+  },
+  colorlinks=false
+}
+
+%-------------------------------------------------------------------------------
+% BIBLATEX
+%
+
+\usepackage[%
+  backend=biber,
+  citestyle=alphabetic,
+  style=alphabetic,
+  sortcites=true,
+  sorting=nyt,
+  %natbib=true,
+  firstinits=true,
+  %url=false,
+  isbn=false,
+  date=iso8601,
+  urldate=iso8601
+]{biblatex}
+\DeclareNameAlias{default}{last-first}
+
+% only capitalize real titles
+% http://tex.stackexchange.com/a/22981/46356
+\DeclareFieldFormat{sentencecase}{\MakeSentenceCase{#1}}
+\renewbibmacro*{title}{%
+  \ifthenelse{\iffieldundef{title}\AND\iffieldundef{subtitle}}
+    {}
+    {\printtext[title]{%
+        \printfield[sentencecase]{title}%
+        \setunit{\subtitlepunct}%
+        \printfield[sentencecase]{subtitle}}
+      \newunit}%
+  \printfield{titleaddon}}
+
+\defbibheading{memoir}[\bibname]{\chapter*{#1}}
+\setcounter{biburllcpenalty}{7000}
+\setcounter{biburlucpenalty}{8000}
+
+\AtEveryBibitem{\clearlist{language}} % clears language
+\renewcommand*\bibnamedash{\rule[0.48ex]{3em}{0.14ex}\space}
+\renewcommand*{\multinamedelim}{;\space}
+\renewcommand*{\finalnamedelim}{;\space}
+
+\addbibresource{document.bib}
+
+\usepackage{breakurl}
+%\hypersetup{breaklinks=false}
+
+%-------------------------------------------------------------------------------
+% OTHER SETTINGS
+%
+
+% listings
+\lstset{
+  gobble=1,
+  language=Scala,
+  style=blackwhite
+}
+
+\AtBeginDocument{%
+  \lstMakeShortInline[style={inline}]|
+}
+
+% toc
+\setlength{\cftbeforechapterskip}{1ex} % decrease space between sections
+
+% floats and epigraphs
+\newlength{\capwidth}
+\addtolength{\capwidth}{\textwidth}
+\addtolength{\capwidth}{-4ex}
+\captionwidth{\capwidth}
+\captionstyle[\raggedright]{}
+
+\setlength{\epigraphwidth}{\textwidth}
+\setlength{\epigraphrule}{0pt}
+
+\renewcommand{\textfloatsep}{\baselineskip}
+
+\setcounter{topnumber}{1}       % allow only one float per page
+
+% no need for colors here...
+\colorlet{textred}{darkgray!80}
+\colorlet{textblue}{darkgray!80}
+
+% change default autoref names
+\addto\extrasenglish{%
+  \renewcommand{\chapterautorefname}{Section}
+  \renewcommand{\sectionautorefname}{Subsection}
+  \renewcommand{\pageautorefname}{Page}
+  %\renewcommand{\pageautorefname}{Page}
+  %\renewcommand{\subsectionautorefname}{Subsection}
+}
+\newcommand{\lstlistingautorefname}{Listing}
+
+% csquotes
+% redefine spacing above/below; hacking original latex definition from 
+% http://mirrors.ctan.org/macros/latex/base/classes.dtx
+\makeatletter
+\newenvironment{myblockquote}
+               {\vspace{-1em}\list{}{\listparindent 1.5em%
+                        \itemindent    \listparindent
+                        \rightmargin   \leftmargin
+                        \parsep        \z@ \@plus\p@}%
+                \item\relax}
+               {\endlist\vspace{-0.5\baselineskip}}
+\makeatother
+\SetBlockEnvironment{myblockquote}
+
+% continuous footnotes
+% http://compgroups.net/comp.text.tex/preventing-footnote-counter-to-reset-with-every/1925434
+\makeatletter
+\@removefromreset{footnote}{chapter}
+\makeatother
+
+% GREEK FONT
+% \usepackage{gfscomplutum}
+\usepackage{../packages/neohellenic_fixed} % otherwise, this overwrites numbers in math mode
+                                           % and some symbols (like \textbullet)
+\providecommand{\greek}[1]{%
+  \textneohellenic{\fontsize{0.7em}{\baselineskip}\selectfont\selectlanguage{polutonikogreek}#1}}
+% \providecommand{\greek}[1]{%
+%   \selectlanguage{polutonikogreek}#1}
+
+% TIKZ SETUP
+\usepackage{tikz}
+\usepackage{tikz-uml}
+\pgfkeys{%
+  /tikzuml/fill class=darkgray!20, 
+  /tikzuml/fill state=darkgray!20, 
+  /tikzuml/fill package=white
+}
+
+\usepackage{rotating}
+
+%-------------------------------------------------------------------------------
+% DOCUMENT MACROS
+%
+\newcommand{\ie}{i.e.\xspace}
+\newcommand{\eg}{e.g.\xspace}
+\newcommand{\cf}{cf.\xspace}
+\newcommand{\margintodo}[1]{\todo[noline, size=\tiny]{#1}}
+\newcommand{\dsl}{\abbrev{DSL}}
+\newcommand{\dsls}{\abbrev{DSL}s}
+\newcommand{\actium}{\texttt{actium}}
+\newcommand{\actiumtitle}{{\small\texttt{ACTIUM}}}
+\newcommand{\csharp}{{C\nolinebreak[4]\raisebox{0.03em}{\#}}}
+\newcommand{\fsharp}{{F\nolinebreak[4]\raisebox{0.03em}{\#}}}
+\newcommand{\CC}{{C\nolinebreak[4]\hspace{-.05em}\raisebox{.22ex}{\small\textbf{++}}}}
+%\newcommand{\autosubref}[1]{{\hyperref[#1]{Subsection~\ref*{#1}~--~\nameref*{#1}}}}
+\newcommand{\autosubref}[1]{\autoref{#1}}
+\newcommand{\aref}[1]{\hyperref[#1]{Appendix~\ref{#1}}}
+\newcommand{\githubsymbol}{%
+  \includegraphics[height=0.75\baselineskip]{fig/github-logo-large}}
+\newcommand{\github}[2][https://github.com/phipsgabler]{\href{#1/#2}{\protect\githubsymbol}}
+\newcommand{\githubcommit}[2]{\href{#1#2}{\nolinkurl{#1}}}
+
+\newcommand{\mathlst}[1]{\text{\lstinline|1|}}
+
+
+%-------------------------------------------------------------------------------
+% DOCUMENT
+%-------------------------------------------------------------------------------
+
+\begin{document}
+\pagestyle{simple}
+\chapterstyle{hangnum}
+\frontmatter
+
+\begingroup
+  \thispagestyle{empty}
+  \centering
+  \vspace{3cm}
+  {\LARGE Philipp Gabler \par}
+  \vspace{2cm}
+  {\Huge\bfseries \thetitle \par}
+  \vspace{0.5cm}
+  {\Large\itshape\bfseries \upinitial{A}{0pt} \upinitial{C}{-0.8pt}ase %
+    \upinitial{S}{-0.7pt}tudy with \upinitial{A}{-0.6pt}ction \upinitial{S}{-1.4pt}ystems \par}
+  \vspace{2.2cm}
+  {\Large\scshape Bachelor's Thesis}
+  \vfill
+  {\large Graz University of Technology \par}
+  \vspace{1ex}
+  {\large Institute for Software Technology \par}
+  \vspace{1cm}
+  {Supervisor: Ao.\thinspace{}Univ.-Prof. Dipl.-Ing. Dr.\thinspace{}techn. Bernhard Aichernig \par}
+  \vspace{1.1cm}
+  {\small\slshape Graz, June 2015 \par}
+\endgroup
+
+
+\movetoevenpage
+\begin{adjustwidth}{\absleftindent}{\absrightindent}
+  \phantomsection
+  % \addcontentsline{toc}{chapter}{Licenses}
+  \label{license}
+  \currentpdfbookmark{License}{license}
+
+  \abstracttextfont
+  \vspace*{\stretch{1}}
+  \begin{center}
+    This work is licensed under a \\ \href{http://creativecommons.org/licenses/by-sa/4.0/}{Creative
+      Commons Attribution-ShareAlike 4.0 International License}.
+  \end{center}
+  \begin{center}
+    \includegraphics[scale=1]{fig/by-sa}
+  \end{center}
+  \vspace{\stretch{2}}
+  \begin{center}
+    All code samples, unless otherwise noted or cited from other sources, \\ are also available under an
+    \href{http://opensource.org/licenses/MIT}{\abbrev{MIT} license}:
+  \end{center}
+  \vspace*{-1ex}
+  \begin{ttfamily}
+    \setlength{\parskip}{12pt}
+    \setlength{\parindent}{0pt}
+    The MIT License (MIT)
+
+    Copyright (c) 2015 Philipp Gabler
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+    and associated documentation files (the "Software"), to deal in the Software without
+    restriction, including without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or
+    substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+    BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+    NON\-IN\-FRINGE\-MENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+  \end{ttfamily}
+  
+  \vspace{2ex}
+  
+  \begin{adjustwidth}{0.5\absleftindent}{0.5\absrightindent}
+    \begin{Center}
+      A full |sbt| project containing many of the code samples can be found at
+      \url{https://github.com/phipsgabler/dsl-examples}. 
+
+      The \LaTeX{} source and a screen-optimized version of this document \\
+      are available at request.\footnote{\texttt{pgabler@student.tugraz.at}}
+    \end{Center}
+  \end{adjustwidth}
+  
+  \vspace{\stretch{1}}
+
+\end{adjustwidth}
+
+
+\movetooddpage
+\phantomsection
+% \addcontentsline{toc}{chapter}{Abstract}
+\label{abstract}
+\currentpdfbookmark{Abstract}{abstract}
+\begin{abstract}
+
+\noindent
+Programming languages have been and still are becoming more and more abstract, and increasingly
+specialized complicated applications and libraries are implemented. With that tendency, a great
+amount of \enquote{linguistic} flexibility is both available and needed. However, the combination of
+the power at hand of the programmer and the need to describe the increasingly complex systems has
+yet to be fully explored; this is the traditional habitat of Domain Specific Languages (\dsls).
+
+\textsc{Dsl}s have been in long use in the programming community. The philosopy behind them is the
+following: do not try to come up with a syntax so general that it can concisely express every
+problem (that is probably impossible); rather, define a smaller language to describe the specific
+problem, and embed that into a system which can combine the specific languages. In the case of
+\emph{embedded} \dsls, that outer system is itself a general-purpose programming language, though
+preferably one which properly supports embedding small sublanguages in a convenient way.
+
+Often, \abbrev{LISP} has been termed such a \enquote{programmable programming language}. As of
+today, Scala probably comes closest to this high claim, at least from the perspective of a
+programmer used to conventional languages. This bachelor thesis tries to explore how Scala makes it
+easy to write \dsls{}, which allow to express specific problems such that there is no additional
+\enquote{code noise} around them, and that the description really behaves in a transparent way, like
+a reader would expect it from the code.
+
+For that purpose, in the first part an overview is given of \dsls{} in general and Scala's special
+features that help with implementing them, complemented with a description of some useful patterns
+for that purpose. Then, in the second part, the implementation of a specific \dsl{} for Action
+Systems is described. Action Systems are a formalism originally used to formalize behaviour of
+distributed, concurrent systems; in the context of this work, however, they are treated more as in
+their interpretation as non-deterministic transition systems, which is a useful point of view for
+performing model-based testing.
+\end{abstract}
+
+\begingroup
+\cleartorecto
+\hypersetup{linkcolor=black, hyperindex=true}
+\label{toc}
+\currentpdfbookmark{Contents}{toc}
+\tableofcontents*
+\endgroup
+
+\cleartorecto
+\mainmatter
+
+\input{1-introduction.tex}
+
+\input{2-concepts.tex}
+
+\input{3-syntax.tex}
+
+\input{4-patterns.tex}
+
+\input{5-action_systems.tex}
+
+\input{6-actium.tex}
+
+\input{7-resumee.tex}
+
+
+%-------------------------------------------------------------------------------
+\clearpage
+\vspace{2em}
+\appendix
+
+
+\begingroup
+
+\microtypesetup{protrusion=false, expansion=false}
+%\raggedright
+\sloppy \defbibnote{sips}{Note: features to be included in Scala are first proposed in Scala
+  Improvement Proposals (\abbrev{SIP}s), collected at
+  \url{http://docs.scala-lang.org/sips/index.html} while they are reviewed or \enquote{pending}. The
+  \abbrev{SIP}s cited here are always noted as \enquote{pending} or \enquote{accepted} as of the
+  state at the time of writing this (May/June 2015).}
+
+\phantomsection
+\addcontentsline{toc}{chapter}{Bibliography}
+\printbibliography[heading=memoir, prenote={sips}]
+
+\endgroup
+
+%-------------------------------------------------------------------------------
+\appendix
+\chapter{Example Programs}
+\label{sec:appendix}
+
+\section{SimpleRocket in Original Syntax}
+\label{sec:simplerocket_original}
+\lstinputlisting[style=fullpage,language={}]{code/SimpleRocket.acsys}
+
+\section{SimpleRocketNoDSL}
+\label{sec:simplerocketnodsl}
+\lstinputlisting[style=fullpage,firstline=6]{code/SimpleRocketNoDSL.scala}
+
+\section{SimpleRocket}
+\label{sec:simplerocket}
+\lstinputlisting[style=fullpage,firstline=9]{code/SimpleRocket.scala}
+
+\section{ExtendedSimpleRocket}
+\label{sec:extendedsimplerocket}
+\lstinputlisting[style=fullpage,firstline=8]{code/ExtendedSimpleRocket.scala}
+
+
+%-------------------------------------------------------------------------------
+\cleartoverso
+\thispagestyle{empty}
+\renewcommand{\abstractname}{Colophon}
+\begin{abstract}
+  \noindent
+  This document was typeset using the pdf\LaTeX{} typesetting system, with the memoir document
+  class. The body text is set in 11\,pt Linux Libertine, enhanced by the microtype package. Other
+  fonts include Biolinum, Inconsolata, and \abbrev{GFS} Neohellenic. The drawings are typeset using
+  TikZ/PGF, and source code examples are formatted by the listings package.
+
+  The document source has been written in Emacs with AUC\TeX{} mode, using TeXworks as \abbrev{PDF}
+  viewer.
+\end{abstract}
+
+\end{document}
+
+%%% Local Variables: 
+%%% TeX-master: "document-print"
+%%% TeX-command-extra-options: "-shell-escape"
+%%% End:

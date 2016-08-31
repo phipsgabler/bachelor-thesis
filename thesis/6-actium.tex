@@ -1,0 +1,887 @@
+\chapter[Actium~-- a DSL for Action Systems]{{\texttt{Actium}}~-- a DSL for Action Systems}
+\label{sec:implementation}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% \section[Implementation of Actium: The Details]{Implementation of
+%   \kern-0.5pt{\small\texttt{ACTIUM}}: The Details}
+% \label{sec:implementation}
+
+This section consists of four parts, which try to introduce \actium{} to the reader from the lowest
+to the highest level. The first subsection describes the non-\dsl{} interface and the basic pattern
+of how an Action System is defined as a conventional class. The second one explains the inner
+workings of the library, and how systems are executed internally. Finally, the remaining two
+sections show how the language features of Scala were used to built on top of that the desired
+domain-specific interface, and describe some interesting implementation details, as well as some
+additional functionalities.
+
+%--------------------------------------------------------------------------------
+\section{Building a System}
+\label{sec:building}
+
+\begin{figure}[b]
+  \centering
+  \scriptsize\sffamily
+  \begin{tikzpicture}
+    \usetikzlibrary{positioning}
+    \tikzumlset{font=\scriptsize\sffamily}
+      \umlbasicstate[x=0,y=0,name=Destroyed]{Destroyed}
+      \umlbasicstate[x=4,y=0,name=AirAndOn]{AirAndOn}
+      \umlbasicstate[x=4,y=-2.5,name=GroundAndOn]{GroundAndOn}
+      \umlbasicstate[x=0,y=-2.5,name=GroundAndOff]{GroundAndOff}
+      \umlstateinitial[x=0,y=-4,name=Start]
+      \draw [->] (Start.north) -- (GroundAndOff.south);
+      \draw [->, transform canvas={yshift=+2mm}] (GroundAndOff.east) -- (GroundAndOn.west)
+          node[above, midway]{PowerOn};
+      \draw [->, transform canvas={yshift=-2mm}] (GroundAndOn.west) -- (GroundAndOff.east)
+          node[below, midway]{PowerOff};
+      \draw [->, transform canvas={xshift=+2mm}] (GroundAndOn.north) -- (AirAndOn.south)
+          node[right, midway]{Start};
+      \draw [->, transform canvas={xshift=-2mm}] (AirAndOn.south) -- (GroundAndOn.north)
+          node[left, midway]{Land};
+      \draw [->] (AirAndOn.west) -- +(west:1.9cm) node[above, midway]{Destroy};
+      \draw [rounded corners] ([yshift=-2mm] AirAndOn.east) 
+          -| +(0.6, 0.4) -- ([yshift=2mm] AirAndOn.east) [->];
+      \node [right=0.6cm of AirAndOn.east] {Move(x, y)};
+  \end{tikzpicture}
+  \caption{State diagram of the \lstinline|SimpleRocket| Action System. What happens internally, is
+    not specified, and no data path operations are mentioned; the important information is that only
+    sequences of actions (transitions) from this graph are allowed. When the \lstinline|Destroyed|
+    state is reached, no more actions are possible and the system must
+    stop.\label{fig:simple_rocket}}
+\end{figure}
+
+To explain the features of the implementation on an actual example, a very simple Action System for
+an imaginary rocket will be used. The definitions and possibilities of \actium{} are shown
+step-be-step using this system. In \autoref{fig:simple_rocket}, a state diagram of it can be
+seen. Basically, the rocket can be turned on, start, fly, land, and be turned off; when flying, it
+can also be destroyed. Note that implementing this as an Action System does not necessarily have to
+follow the shown partition into states; how internal state is handled is completely up to what form
+of modelling and refinement is used, and state variables can be chosen as needed. The important
+information of that diagram is to show the allowed sequences of Actions by the transitions of the
+graph.
+
+\newthought{On the most basic level} of defining an Action System, the |ActionSystem| trait and
+Scala's standard syntax are already enough to achive a certain level of expressiveness superior to
+many other languages. A concrete implementation will typically be an |object|, if all aspects of the
+behaviour are already fixed, or an abstract class leaving some parts, so that they can later be
+mixed in on a per-instance basis (especially \enquote{choice traits}, as |RandomChoice| in the
+example below~-- these will be explained in detail in the next subsection). Basically, an
+|ActionSystem| instance can be created with \eg
+\begin{lstlisting}
+  val r1 = new SimpleRocket with RandomChoice
+\end{lstlisting}
+On this |r1|, we could now, in principle, call the methods |addAction| and |initialize| to add all
+necessary behaviour; however, the idea is to specify everything possible in the primary constructor
+of the class or object, since in most cases, the behaviour of an instance is known beforehand
+(still, the possibility to construct an |ActionSystem| instance programatically, \eg, from an
+external specification, is left open). Scala makes this construction in the constructor especially
+easy by treating everything inside a class body as part of the primary constructor; so, if our
+example class looks like
+\begin{lstlisting}[mathescape]
+  abstract class SimpleRocket extends ActionSystem with GherkinSyntax {
+    $\vdots$
+    initialize(something)
+    addAction(Action('foo, True, stmts))
+  }
+\end{lstlisting}
+at instance creation the initial environment will be set to |something|, and one action |'foo| be
+added~-- there is no need to declare an extra constructor method. In fact, in many cases, an
+implementation will do without any method declarations whatsoever, by just putting everything in the
+primary constructor (that is, the class body).
+
+Now, lets consider an actually useful instance for the above example. The following statements are
+meant to be put directly into the above |SimpleRocket| class. First, we should define how we are
+going to represent the state of the system; in this case, we encode everything as integers:
+\begin{lstlisting}
+  type State = Int
+\end{lstlisting}
+Then, in order to actually write something useful, it is convenient to first give some
+initializations to the system, declaring shorthands for states and symbolic variables:
+\begin{lstlisting}
+  val F = 0
+  val T = 1
+  val Air = 0
+  val Ground = 1
+  val Destroyed = 2
+
+  val engine = Variable('engine)
+  val mode = Variable('mode)
+  val pos_x = Variable('pos_x)
+  val pos_y = Variable('pos_y)
+\end{lstlisting}
+The |Variable| constructor is provided by the library. Some of these definitions are not a strictly
+necessary part of the system declaration, but will improve readability later. To get a runnable
+system, we also need to initialize it:
+\begin{lstlisting}
+  initialize(
+    Assignment(engine, Constant(F)),
+    Assignment(mode, Constant(Ground)),
+    Assignment(pos_x, Constant(0)),
+    Assignment(pos_y, Constant(0))
+  )
+\end{lstlisting}
+The only task of |initialize| is adding a list of |Assignment|s to the environment in order to
+provide the state variables and their initial values. Again, |Assignment| and |Constant| are part of
+the symbolic representation provided by the library. Here, only constants are assigned, but in
+principle, any expression could stand on the right hand side of an assignment. The assignments are
+evaluated individually, one after the other, at the time of adding (that is, at class construction),
+and each evaluation is done using the current environment~-- this allows assigning state variables
+based on previous values, like
+\begin{lstlisting}
+  Assignment(pos_x, Constant(0)),
+  Assignment(pos_y, pos_x)
+\end{lstlisting}
+where at the definition of |pos_y|, |pos_x| is already existing in the environment.
+
+\newthought{If all helpers are defined}, and everything is initialized, the only thing remaining to
+do is adding the actual actions. For this purpose, there exists the method %
+|addAction(action: Action): Unit|, which updates the internal table of actions. The exact definition
+of |Action| will be shown below (\autopageref{lst:action}) and contains the name, the condition, the
+statement, and optionally the parameters of an action. To actually construct an action, it is
+necessary to put in the \abbrev{AST}s of all these parameters:
+\begin{lstlisting}
+  addAction(Action('PowerOn,
+    And(Predicate2("==", engine, Constant(F)), 
+        Predicate2("!=", mode, Constant(Destroyed))),
+    Seq(Assignment(engine, Constant(T))))
+  )
+\end{lstlisting}
+which corresponds to
+\begin{lstlisting}[language={}]
+  powerOn() if engine == 0 && !(mode == Destroyed) then
+  {
+    engine := 1;
+  };
+\end{lstlisting}
+in the external syntax~\cite{tappler2015:symbolic}. For parametrized actions like the one shown in
+\autoref{lst:move_action}, we can fill in |Action|'s optional last parameter (which otherwise
+defaults to |Seq()|):
+\begin{lstlisting}
+  addAction(Action('Move,
+    And(Predicate2("==", engine, Constant(T)), 
+        Predicate2("==", mode, Constant(Air))),
+    Seq(Assignment(pos_x, Application("+", pos_x, Variable('dx))),
+        Assignment(pos_y, Application("+", pos_y, Variable('dy)))),
+    Seq(Variable('dx), Variable('dy)))
+  )
+\end{lstlisting}
+The whole system, defined on this level of the syntax, can be found in \aref{sec:simplerocketnodsl}
+(for comparison, \aref{sec:simplerocket_original} contains the definition in the original external
+syntax).
+
+There is not much more to be said now about constructing the system; in principle, the shown methods
+are all which is needed. Also, the term \dsls{} are not much more complicated than in the examples
+above: value expressions are constants, variables, or function applications; conditions are
+predicates on expressions or propositional terms thereof, using |And|, |Or|, and |Not|; and
+statements are mostly |Assignment|s of a variable to an expression.
+
+
+%--------------------------------------------------------------------------------
+\section{Underlying Architecture and Funtionality}
+\label{sec:execution}
+
+The library is built up in as modular a way as possible~-- what can be parametrized, will be
+parametrized, and what can be factored out in a trait, will be in a trait. On the other hand, as
+Scala makes it very easy to introduce small wrappers and \abbrev{ADT}s in the form of case classes,
+these are also frequently used, even if a plain type maybe would have been enough. A rough graphical
+overview of the most important classes and traits is given in \autoref{fig:architecture}, which is
+not really a class diagram, but rather the relations that could be found in an example case for some
+|ConcreteActionSystem|. Note that the members listed there are not complete, and their types in some
+cases are simplified; the diagram only tries to capture the essence of the typical hierarchy.
+
+\newthought{The main part of \kern-0.5pt{\footnotesize\texttt{ACTIUM}}'s functionality} is
+implemented in the trait |ActionSystem|. As indicated by the name, this trait represents the
+functionality of an Action System, which consists of adding actions, initializing and resetting the
+state, and executing the system. The respective methods for these abilities are provided by the
+trait, together with fields containing the necessary state. There are two kinds of things left
+abstract by |ActionSystem|: the |State| type, and the way actions and parameters are practically
+chosen at execution.
+
+While most methods of |ActionSystem| are actually just more complex getters or setters, the main
+logic of execution lies in |run|. This is technically also not really a method (although it compiles
+to one); rather, the result of |run| is a recursively defined |Stream[Choice]|. Streams are Scala's
+standard implementation of lazy collections~-- they can be potentially infinitely long, since next
+elements are calculated only on demand. |Choice| is not more than a case class containing the label
+of an action, and a map of the chosen parameters:
+\begin{lstlisting}
+  final case class Choice[State](label: Label,
+    params: Map[Variable[State], State] = Map[Variable[State], State]())
+\end{lstlisting}
+
+
+\begin{sidewaysfigure}[p!]
+  \changecaptionwidth
+  \captionwidth{0.72\stockheight}
+  \centering
+  \tikzumlset{font=\scriptsize\sffamily}
+  \begin{tikzpicture}[]
+    \usetikzlibrary{arrows, positioning}
+    \tikzumlset{font=\scriptsize\sffamily}
+  
+    \tikzset{%
+      inherit/.style={>={open triangle 60}},
+      depend/.style={>={angle 60}, dashed}}
+
+    \begin{umlpackage}{actium}
+      \begin{umlpackage}[x=7, y=0]{expressions}
+        \umlemptyclass[x=0]{trait Condition}
+        \umlemptyclass[x=3]{trait Expression}
+        \umlemptyclass[x=6]{trait Statement}
+      \end{umlpackage}
+      \umlclass[x=0, y=-2.5]{trait ActionSystem}{
+        +\umlvirt{type State} \\
+        -environment: MutableMap[Variable[State], State] \\
+        -actionList: MutableMap[Label, MutableSet[Action]] \\
+      }{
+        +run: Stream[Choice] \\
+        +addAction: Action => Unit \\
+        +initialize: Assignment[State] => Unit \\
+        +reset: () => Unit \\
+        \#\umlvirt{chooseAction: Seq[Action] => Option[Action]} \\
+        \#\umlvirt{chooseParameters: (Label, Seq[Variable[State]]) => Map[Variable[State], State]} \\
+      }
+      \umlclass[x=0, y=-7]{object ConcreteActionSystem}{
+        +type State = ConcreteState
+      }{}
+      \umlclass[x=10, y=-7]{trait GherkinSyntax}{}{
+        +when, +given, +and, +but, +then\_do 
+      }
+      \draw [->, inherit] (object ConcreteActionSystem.north) -- (trait ActionSystem.south);
+      \draw [->, inherit] (object ConcreteActionSystem.east) -- (trait GherkinSyntax);
+      \draw [->, depend] (trait GherkinSyntax.north) -- (expressions.south);
+      \umlclass[x=11, y=-3]{trait RandomChoice}{
+      }{
+        +chooseAction: Seq[Action] => Option[Action] \\
+        +chooseParameters: (Label, Seq[Variable[State]]) => Map[Variable[State], State] \\
+      }
+      \draw [inherit] (object ConcreteActionSystem.north) -- +(0, 1) [->] -| (trait RandomChoice.south);
+      \draw [->, depend] (trait RandomChoice.west) -- +(west:1.15cm);
+      \draw [->, depend] (trait RandomChoice.north) -- +(north:1.15cm);
+      \draw [->, depend] (trait ActionSystem.10) -| (expressions.220);
+      \draw [depend] (trait GherkinSyntax.north) -- +(0, 0.5) [->] -| (trait ActionSystem.300);
+    \end{umlpackage}
+  \end{tikzpicture}
+  \caption{\footnotesize Overview of the most important parts of the architecture of \actium{}. This
+    is an example configuration for an imaginary concrete Action System. The trait members are not
+    all shown in their precise form; this is just to provide an overview from the implementor's
+    point of view. Any concrete Action System needs to inherit from
+    \lstinline[columns=fixed]|ActionSystem| and some implementation of choice, which provides
+    \lstinline[columns=fixed]|chooseAction| and
+    \lstinline[columns=fixed]|chooseParameters|. Furthermore, the implementation will mix in the
+    \dsl{} syntax from \lstinline[columns=fixed]|GherkinSyntax|.  All these traits depend on
+    \lstinline[columns=fixed]|ActionSystem| by restricting their self
+    types.\label{fig:architecture}}
+\end{sidewaysfigure}
+
+In summary, when calling |run|, one has at hand a lazy |Stream| of the stepwise results of the
+execution of the system (as it is done according to the concrete choice implementation). From that
+stream, one can \enquote{take off} arbitrarily many steps by calling the stream's |force| method
+(usually the number of taken elements will be restricted in some form, \eg using |take|):
+\begin{lstlisting}[style=break-lines]
+  scala> val r = new SimpleRocket with RandomChoice
+  r: actium.examples.simpleRocket.SimpleRocket with actium.RandomChoice = $anon$1@69005b59
+
+  scala> r.run.take(5).force
+  res0: scala.collection.immutable.Stream[r.Choice] = Stream(Choice('PowerOn), Choice('Start), Choice('Destroy))
+\end{lstlisting}
+The actual updates to the state only happen when the elements of the stream are evaluated, and
+persist afterwards~-- so, before calling |run| again from the initial state, the system has to be
+|reset|. With functions like |take| it is possible to only run as many actions as desired, and then
+continue later with the execution. In the example, there were not even run as many actions as
+possible, since the execution ended in the final state |'Destroyed| after only three steps.
+
+To define a concrete instance, the abstract members must be provided by the concrete object or class
+for the system in question. Concrete methods for choosing parameters and actions are in the current
+implementation usually factored out into \emph{choice traits}, which can be used to mix in various
+behaviours of choosing; at the moment, there are three useful variants of them: |RandomChoice| uses
+a uniform random distribution to choose actions and parameters, |IOChoice| provides a console
+interface for entering all information, and |StaticChoice| is thought mainly for testing, as it
+allows to fix a sequence of actions and parameters beforehand. Of course, these traits could also be
+left out totally, and a new, custom way of choice be implemented.
+
+The |State| type is typically defined inside the body of the system object, where the main behaviour
+is defined using the necessary calls of |initialize| and |addAction|. It is also possible to just
+define |State| and the actions, and leave the choice abstract, allowing it to be mixed in at a later
+time. This can be used to treat a system differently, \eg, for testing its correct behaviour and
+actually using it for running a simulation, or for simply exploring it in the console.
+
+\pagebreak[4]
+\newthought{The subpackage \kern-0.5pt{\footnotesize\texttt{ACTIUM.EXPRESSIONS}}} contains the
+classes for the \abbrev{ADT} representation of expressions, statements and conditions (predicates on
+expressions). The three of these are abstract sealed traits, implemented by case classes for the
+possible values of each (such as |And| for |Condition|, or |Assignment| for |Statement|). The
+classes are also all tagged with a |State| type, and the traits contain evaluation of the
+representations as functions taking an environment and returning a |State| (or a |Boolean|, in the
+case of |Condition|).
+
+Expressions are the most important building blocks of the behaviour of an |ActionSystem|, since they
+determine when and how the state changes. The whole representation of an action is in fact defined
+just like this:
+\begin{lstlisting}[label=lst:action]
+    final case class Action[State](label: Label,
+      condition: Condition[State],
+      statements: Seq[Statement[State]],
+      params: Seq[Variable[State]] = Seq[Variable[State]]())
+\end{lstlisting}
+That describes an action by its label, \abbrev{ADT}s for the conditions upon which it gets enabled
+(these can depend on the state as well as the parameters of the action) and the statements which
+will be executed in the action, and optionally a symbolic representation of the parameters the
+action takes. The main part of the definition of an Action System consists of constructing such
+|Actions| out of small \abbrev{AST}s for statements and conditions, and registering them using
+|addAction|.
+
+There is not really much \abbrev{DSL}-specific to say at this point but the following: since the
+definition of |Action| shows that an Action System's behaviour is represented symbolically by an
+\abbrev{AST}, \actium{} can be called a deep embedding (\cf \autopageref{dsl-definitions}). This
+form of representation was chosen because it does not only allow execution in different ways, but
+also can be transformed into other formats and used for different purposes than just running a
+system. For example, there exists a translation function to the \abbrev{AST} of the |as2bmc|
+library~\cite{maderbacher2016:weak}, which in turn is able to transform Action Systems into logical
+expressions for the |Z3| \abbrev{SMT} solver (see~\autosubref{sec:extending_functionality}). These
+can be used to perform mutation-testing by constraint solving, as mentioned in the introduction of
+this part (see~\autopageref{constraint_solving}).
+
+
+%--------------------------------------------------------------------------------
+\section{Improving the Syntax}
+\label{sec:improving_syntax}
+
+This subsection is concerned mainly with what is happening in |GherkinSyntax|. This trait is an
+optional mixin for |ActionSystem|, but forms the main point of exploration relevant to this
+work. For implementing an |ActionSystem| in the \abbrev{DSL} style, one can use language features
+and |GherkinSyntax|' helpers on three levels: basic definitions, action specifications, and
+expressions.
+
+\newthought{The main \dsl{} part} comes in at taking the methods shown above, and improving the way
+they are written. Until now, all methods shown are already implemented in |ActionSystem|; now the
+real \dsl{} part, as implemented in the mixin |GherkinSyntax|, is explained. Its purpose consists
+mostly of providing methods to replace the above literal form of initialization and defining actions
+by something more natural, ideally in a style very similar to the shown external
+\dsl{}. Additionally, there are a variety of helpers provided to construct expressions and
+conditions in a more natural way, looking like native expressions, relieving the need of
+constructing their \abbrev{AST}s by hand. Both kinds of helpers make heavy use of implicits and
+extension wrappers.
+
+\begin{lstlisting}[style=floating, label=lst:expressions,
+  caption={Simplified definitions of all \abbrev{AST} classes in the \lstinline|expressions|
+    sub-package.}]]
+  sealed trait Expression[+A]
+  case class Application[+A](op: String, args: Expression[A]*) 
+    extends Expression[A]
+  sealed trait Value[+A] extends Expression[A]
+  case class Constant[+A](value: A) extends Value[A]
+  case class Variable[+A](name: Symbol) extends Value[A]
+
+  sealed trait Statement[+A]
+  case class Assignment[+A](variable: Variable[A], 
+    assignment: Expression[A]) extends Statement[A]
+  case class ExternalAction[A](run: () => ExternalResult)
+    extends Statement[A]
+
+  sealed trait Condition[+A]
+  case class And[+A](a: Condition[A], b: Condition[A]) extends Condition[A]
+  case class Or[+A](a: Condition[A], b: Condition[A]) extends Condition[A]
+  case class Not[+A](a: Condition[A]) extends Condition[A]
+  case class Predicate1[A](p: String, a: Expression[A]) 
+    extends Condition[A]
+  case class Predicate2[A](p: String, a: Expression[A], b: Expression[A])
+    extends Condition[A]
+  case object True extends Condition[Nothing]
+  case object False extends Condition[Nothing]
+\end{lstlisting}
+
+To understand how the syntax for \actium{} was chosen, consider again the following action
+definition from the external sytax:
+\begin{lstlisting}[language={}]
+  powerOn() if engine == 0 && !(mode == Destroyed) then {
+    engine := 1; 
+  };
+\end{lstlisting}
+To translate this into a Scala expression, we can inspect its parts and proper ways of representing
+them. First, the guard of the action,
+\begin{lstlisting}[language={}]
+  engine == 0 && !(mode == Destroyed)
+\end{lstlisting}
+is just a boolean expression which should, when translated, end up in the following \abbrev{AST}
+representation, as we have seen above:
+\begin{lstlisting}
+  And(Predicate2("==", engine, Constant(F)), 
+      Predicate2("!=", mode, Constant(Destroyed)))
+\end{lstlisting}
+How such expression syntaxes can easily be embedded into Scala by the help of operators has been
+shown in \autoref{sec:method_calling}. Because we are dealing essentially with predicate logic, the
+definition of these operators spreads over two places: |Expression| and |Condition|. In |Condition|,
+only the boolean combinators such as |&&| or \lstinline[style=inline]$||$ are defined, whereas
+predicates live in |Expression| (since they operate on values and just return booleans). It should
+be noted that, because of issues concerning covariance of the |Expression| trait when constructing a
+|Predicate2| with the same type parameter, the respective operators are defined not directly in the
+trait, though, but in an implicit wrapper; there, for example, we have the following definitions:
+\begin{lstlisting}
+  def ===(other: Expression[A]): Condition[A] = 
+    Predicate2("==", expr, other)
+  def =!=(other: Expression[A]): Condition[A] = !(expr === other)
+\end{lstlisting}
+The use of |===| instead of the more natural |==| is required, because the latter is already defined
+in |Any| and deepley nested into the language, and thus is not overrideable in a practical way. The
+choice for |=!=| instead of |!==| was of a different kind: here, one of the exceptions of the
+precedence rules for operators (\autopageref{operators}) comes into play, namely, that an operator
+ending in |=| is treated as an assignment operator~-- \emph{unless} its name also starts with |=|,
+in which case it is treated like a comparison operator.
+
+With the help of these operator methods, we are already able to write things like 
+\begin{lstlisting}
+  Variable('engine) === Constant(0)
+\end{lstlisting}
+What remains is to also get rid of the explicit constructors for constant literals. We might try to
+achieve this by providing the according implicit conversions:
+\begin{lstlisting}
+  implicit def literalToConstant(s: State): Constant[State] = Constant(s)
+  implicit def symbolToVariable[A](name: Symbol): Variable[A] = 
+    Variable(name)
+\end{lstlisting}
+Unfortunately, this does not really work out using the current setting. The reason is that to be
+able to write
+\begin{lstlisting}
+  'engine === 0
+\end{lstlisting}
+two implicit conversion would have to be called: one from |Symbol| to |Variable|, and one for the
+wrapper for |Expression| containing |===|.
+
+This problem can be resolved in three ways: on the one hand, one could change the place in
+which |===| was defined to avoid the double wrapping~-- this can be done by implementing |===|
+directly in |Expression|, or by additionally providing a wrapper for |Symbol| which contains |===|
+and performs the wrapping in |Variable| automatically. Both of these have disadvantages, though:
+making |===| part of |Expression| enforces defining the trait's type parameter for |State| to be
+invariant, which might lead to future complications when introducing better support for more complex
+|State| types; and implementing a double wrapper for |Symbol| will lead to more complex definitions,
+while it does not even solve the problem fully, as using too many implicit conversions on
+interferring levels leads to unexpected complications of them.
+
+On the other hand, there is a very simple, although not that succint solution, which has been
+chosen in the current implementation and the examples: we just do not use an implicit conversion for
+the left hand side of a call to |===|. Instead, we can define the state variable |'engine| as a
+|val| in the scope of the class; this has already been shown in the previous subsection:
+\begin{lstlisting}
+  val engine = Variable('engine)  
+\end{lstlisting}
+In order to make this definition a bit more linguistically applealing, there is provided a simple
+method
+\begin{lstlisting}
+  def statevar(name: Symbol) = Variable[State](name)
+\end{lstlisting}
+allowing to write instead
+\begin{lstlisting}
+  val engine = statevar('engine)
+\end{lstlisting}
+(Although this is arguably not too big an improvement; we might instead wish to get rid of the
+redundancy of mentioning the name of the state variable twice, but this is currently only possible
+by using experimental, non-standard macro facilities such as macro annotations.)
+
+Now that these operators and conversions are in place, we finally are able to write
+\begin{lstlisting}
+  engine === F && mode =!= Destroyed
+\end{lstlisting}
+whereby |engine| and |mode| are |Variables| defined as |val|s, and |F| and |Destroyed| are just
+names for the ints |0| and |2|, in this case.
+
+Assignment statements and value expressions work in a similar way to guards\slash |Condition|s. The
+operator |:=| is just a method of |Variable|, taking an |Expression| and returning an
+|Assignment|. In this case, the operator has an intuitive name, and its precedence is as
+expected. The right hand side of this operator can be an arbitrary expression.  Expressions
+themselves are either |Variable|s (containing a symbol for the name), |Constant| (containing a
+literal value of type |State|), or |Application|s of one operator (represented by its name) to a
+list of other expressions.
+
+
+\newthought{Given these basic building blocks} (expressions, conditions, and statements) and their
+symbolic (\dsl{}) representations, we are finally ready to look into the construction of action
+specifications such as this:
+\begin{lstlisting}
+  when('Destroy) given mode === Air then_do (
+    mode := Destroyed,
+    engine := F
+  )
+\end{lstlisting}
+Converted to the underlying \abbrev{AST} translation, this should look like the following code:
+\begin{lstlisting}
+  addAction(Action('Destroy,
+    Predicate2("==", mode, Constant(Air)),
+    Seq(Assignment(engine, Constant(F)), 
+        Assignment(mode, Constant(Destroyed))))
+  )
+\end{lstlisting}
+
+To be able to achieve this in Scala, the trait |GherkinSyntax| introduces the \enquote{keywords}
+|when|, |given|, and |then_do| (as mentioned above, the first two names were taken from
+Gherkin). These keywords are all methods called in dotless style, and work by repeatedly updating
+information in immutable builder objects. These are keeping track of the data provided, which
+finally gets used in |then_do| to call |addAction| of the |ActionSystem|. For example, the above
+definition (|when('Destroy) ...|) can be reduced in one step to the following:
+\begin{lstlisting}
+  new WithLabel {
+    def label = 'Destroy
+    def params = Seq()
+  }.given(Predicate2("==", mode, Constant(Air)))
+   .then_do(Seq(Assignment(engine, Constant(F)), 
+                Assignment(mode, Constant(Destroyed))))
+\end{lstlisting}
+The |WithLabel| builder is the actual result of the |when| method, and contains the name and
+optionally the parameters of the action. |given| is a method of |WithLabel|, which in its body
+constructs a new builder with more information, namely, the condition, and notes this information in
+the result type; therefore, the above reduces further to this:
+\begin{lstlisting}
+  new WithLabel with WithCondition {
+      def label = 'Destroy
+      def params = Seq()
+      def condition = Predicate2("==", mode, Constant(Air))
+  }.then_do(Seq(Assignment(engine, Constant(F)), 
+                Assignment(mode, Constant(Destroyed))))
+\end{lstlisting}
+We now have an object of type |WithLabel with WithCondition|. For this type, an implicit wrapper is
+defined, containing the final |then_do| method, taking the list of statements as variadic parameter
+list. It uses the accumulated information, puts it into an |Action| object, and adds it to the
+system; inlining the accumulated data into |then_do| leads to this final result:
+\begin{lstlisting}
+   { val a = Action('Destroy, Predicate2("==", mode, Constant(Air)), 
+                 Seq(Assignment(engine, Constant(F)), 
+                     Assignment(mode, Constant(Destroyed))), 
+                 Seq())
+     addAction(a) }
+\end{lstlisting}
+which is exactly equivalent to the translation of the example we began with.
+
+\begin{figure}
+  \centering
+  \begin{tikzpicture}[->, thick, grow=right, 
+    level 2/.style={sibling distance=3.5em},
+    level 1/.style={sibling distance=6em, level distance=5em},
+    every loop/.style={min distance=5mm, max distance=7mm, looseness=10}]
+    \node {}
+      child {node (left when) {\lstinline|when|}
+        child {node (left given) {\lstinline|given|}}
+        child {node (left then_do) {\color{textred}\lstinline|then_do|}}}
+      child {node (right given) {\lstinline|given|}
+        child {node (right when) {\lstinline|when|}}
+        child {node (right and_but) {\lstinline|and|, \lstinline|but|}}};
+    \node (left and_but) [right=of left when, xshift=5em] {\lstinline|and|, \lstinline|but|};
+    \node (right then_do) [right=of right given, xshift=5em] {\color{textred}\lstinline|then_do|};
+    \draw (left given) -- (left then_do);
+    \draw (right when) -- (right and_but);
+    \draw (right and_but) -- (right then_do);
+    \draw (right when) -- (right then_do);
+    \draw (left and_but) -- (left then_do);
+    \draw (left given) -- (left and_but);
+    \path (right and_but) edge [loop above] (right and_but);
+    \path (left and_but) edge [loop right] (left and_but);
+  \end{tikzpicture}
+  \caption{Hierarchy of valid command sequences. The highlighted \lstinline|then_do| always
+    concludes a sequence; by applying it to a list of statements, the actions gets defined and 
+    added to the system. 
+    \label{fig:commands}}
+\end{figure}
+
+This describes in the most basic form the idea behind the definition statements. Actually, the
+situation is more complicated; this is why there are different types of builders and extensions
+involved. The reason for the complication is to allow the user a certain freedom in the order and
+choice of the keywords. For example, the \dsl{} allows also the following to be written:
+\begin{lstlisting}
+  given (mode === Air) when 'Land then_do (
+    mode := Ground
+  )
+\end{lstlisting}
+In this case, the order of |given| and |when| is turned around. Or, we could also leave out the
+condition, if the guard is trivial, like in this hypothetical action:
+\begin{lstlisting}
+  when('OpenWindow) then_do (
+    window_state := Open
+  )
+\end{lstlisting}
+The problem is that in a naive implementation of the keyword methods, |then_do| could be called on a
+builder object in an invalid state; for example, if it were defined on the object returned by
+|given|, we could define the following action:
+\begin{lstlisting}
+  given(window_state === Open) then_do (
+    temperature := Cold
+  )
+\end{lstlisting}
+which is not a proper action definition, since it lacks the label. 
+
+To ensure that only valid sequences of keywords can be used to build up an action, we first fix the
+allowed keywords and their order. This is done in \autoref{fig:commands}. Given that hierarchy, and
+the knowledge that there are two relevant parts of information expressed by |given| and |when| (the
+label and the guard of an action), a type-safe chain of calls can be formed. The necessary setup to
+enforce this is listed in \autoref{lst:commands} (in a truncated way, since only the interface is
+relevant here). 
+
+\begin{lstlisting}[style=floating, label=lst:commands,
+  caption={The trait setup to ensure that only valid sequences of statements can be used in an
+    action definition. These methods and traits are all defined in \texttt{GherkinSyntax} and mixed
+    in with it. The implementations are shown as unimplemented here (\texttt{???}).}]
+  def when(lbl: LabelWithParams): WithLabel with Given = ???
+  def given(cond: Condition[State]): WithCondition with When = ???
+
+  trait WithLabel {
+    def label: Label
+    def params: Seq[Variable[State]]
+  }
+
+  trait WithCondition {
+    def condition: Condition[State]
+  }
+
+  trait When { self: WithCondition =>
+    def when(lbl: LabelWithParams): WithLabel with WithCondition = ???
+  }
+
+  trait Given { self: WithLabel =>
+    def given(cond: Condition[State]): WithLabel with WithCondition = ???
+  }
+
+  implicit class WithLabelAndConditionWrapper(
+      builder: WithLabel with WithCondition) {
+    def then_do(stmts: Statement[State]*): Unit = ???
+  }
+
+  implicit class WithLabelWrapper(builder: WithLabel) {
+    def then_do(stmts: Statement[State]*): Unit = ???
+  }
+\end{lstlisting}
+
+To achieve the restriction of call sequences, two methods |given| and |when| are defined at top
+level, each returning the respective builder object, extended with the possibility to call the
+\enquote{opposite} method via the traits |Given| and |When|. By having the methods |given| and
+|when| twice, and in separate place, it is ensured that each of them can only be called once, but in
+any order. Both methods store the particular information collected at the point of their calling in
+the partial builder traits |WithLabel| and |WithCondition|. At last, for |WithLabel| and %
+|WithLabel with WithCondition|, implicit wrappers are provided implementing the final calls to
+|then_do|. 
+
+In addition to the methods shown in the listing, the wrappers for |WithCondition| and %
+|WithLabel with WithCondition| also contain the methods |and|, |or|, and |but|, which can be used as
+synonyms for |given| to add further conditions in a natural-language fashion~-- their only
+functionality is to produce a conjunction or disjunction of the |Condition| on the left and on the
+right; for example, the definition\enlargethispage{1em}
+\begin{lstlisting}
+  when('PowerOn) given engine === F but mode =!= Destroyed then_do (
+    engine := T
+  )
+\end{lstlisting}
+would be equivalent to simply
+\begin{lstlisting}
+  when('PowerOn) given engine === F && mode =!= Destroyed then_do (
+    engine := T
+  )
+\end{lstlisting}
+
+
+The only thing that remains to be explained now is how action parameters are allowed to be specified
+in the convenient call-like fashsion looking like
+\begin{lstlisting}
+  when('Move('dx, 'dy))
+\end{lstlisting}
+The solution is relatively simple: the argument type of |when| is not |Symbol|, but actually
+|LabelWithParams|, a small wrapper containing the label and optionally the parameters:
+\begin{lstlisting}
+  case class LabelWithParams(label: Label, params: Seq[Variable[State]])
+\end{lstlisting}
+To be able to just use symbols and normal application, the following implicit conversions are in scope:
+\begin{lstlisting}
+  implicit def symbolToLabel(s: Symbol): LabelWithParams = 
+    LabelWithParams(s, Seq())
+
+  implicit class LabelWithParamsBuilder(s: Symbol) {
+    def apply(params: Variable[State]*): LabelWithParams = 
+      LabelWithParams(s, params)
+  }
+\end{lstlisting}
+
+In principle, we are now able to fully emulate the original syntax for Action Systems. Some more
+intricate details of implicit conversion and syntactic tricks have been left out, but the basic
+principles should have been made clear. The full |SimpleRocket| example at this point is listed in
+\aref{sec:simplerocket}.
+
+
+%--------------------------------------------------------------------------------
+\section{Extensions to the Basic Functionality}
+\label{sec:extending_functionality}
+
+Finally, besides the basic \dsl{} framework described in the last section, there have been
+implemented some small extensions. Two of these concern the semantics, as compared to the existing
+implementation, while the third one deals with enabling integration of this \dsl{} into another
+existing framework, which forms the basis for a mutation testing pipeline.
+
+\newthought{The first one of these} is quite simple: \actium{} allows to define multiple actions
+with the same label; that is, using |when('Something)| multiple times will not cause any
+problems. This is handled internally by simply associating with each label not an |Action|, but a
+|Set[Action]|, and flattening the sets accordingly at evaluation. The individual actions are,
+however, always properly distinguished when needed; for example, when running the system with a
+choice trait, or when converting a system to an alternative symbolic representation.
+
+\newthought{The second semantic extension} is the introduction of an additional statement besides
+assignment, which can not be found in other Action System formulations: |externally|. This statement
+is defined in the extra trait |ExternalEffects| (which is a mixin to |GherkinSyntax|), and allows to
+embed arbitrary Scala code in an action; this code will be executed each time the action is
+executed. In the simplest form, this can be just a debug message:
+\begin{lstlisting}
+  when('Destroy) given mode === Air then_do (
+    mode := Destroyed,
+    engine := F,
+    externally(println("BOOM!"))
+  )
+\end{lstlisting}
+The content of |externally| is a closure (represented internally as |() => Unit| and passed
+by-name), and can thus access external state in the form of |var|s defined in the class, or even
+through library calls. However, what's even more powerful is that there is full access to the
+systems state variables and the action's parameters at the point of executing the external
+closure~-- which is somewhat more complex to realize. Concretely, we can have an action like this:
+\begin{lstlisting}
+  when('Position('x, 'y)) given mode === Air && engine === T then_do (
+    pos_x := 'x,
+    pos_y := 'y,
+    externally {
+      println(s"x = ${'x.value}, pos_x = ${'pos_x.value}")
+    }
+  )
+\end{lstlisting}%$
+(whereby |pos_x| is part of the state variables if the |SimpleRocket| system). 
+
+What is important here is the usage of the form |'x.value| to access variables from the scope of the
+action. The method |value| is defined as an extension for |Symbol|~-- and it takes as an implicit
+parameter an |ImplicitEnv[State]|. This class is just a wrapper about a |Map[State]|. The fact
+exploited to make this work is that the actual implicit value, that is provided for this parameter,
+is defined as a |var|. That way, at each evaluation the environment can be filled with the current
+values. For better understanding, look at the simplified variant of the pattern in
+\autoref{lst:external_example}. There the structure of the relevant commands have been
+\enquote{rebuilt}, in a way to resemble the original implementation. It is important to note that
+|execute| already closes over the reference to the empty environment.
+
+\begin{lstlisting}[style=floating, label=lst:external_example,
+  caption={A simplified example of how the variable capturing in external statements is
+    implemented: by capturing an implicit reference, and setting it later to the then current
+    environment. \texttt{externally} and \texttt{ValueWrapper} are in reality provided by 
+    the mixin \texttt{ExternalActions}; \texttt{ExternalAction} is defined in the statement
+    \abbrev{ADT}.}]
+  implicit class ValueWrapper(s: Symbol)(implicit env: Map[Symbol, Int]) {
+    def value = env(s)
+  }
+
+  case class ExternalAction(block: () => Unit)
+
+  def externally(block: => Unit) = ExternalAction(() => block)
+  
+  implicit var environment = Map[Symbol, Int]()
+  def then_do(as: ExternalAction*) = new {
+    def execute(env: Map[Symbol, Int]) = {
+      environment = env
+      as foreach (_.block())
+    }
+  }
+\end{lstlisting}
+
+If we now use this example framework to define an action, like so:
+\begin{lstlisting}
+  val pseudoAction = then_do(
+    externally {
+      println('y.value)
+    }
+  )
+\end{lstlisting}
+the reference to |environment| also gets passed implicitly to |value|, and is therefore used in
+|ValueWrapper|'s definition to look up the value of |'y|. However, since all this is passed by-name,
+the lookup will not happen immediately and use the empty dictionary; only when we execute the
+pseudo-action, like this:
+\begin{lstlisting}
+  pseudoAction.execute(Map('x -> 1, 'y -> 42))
+\end{lstlisting}
+the closure will actually be called~-- but before calling, the environment reference will be updated
+according to the parameter of the |execute| method, which in the case of the actual |ActionSystem|
+resembles the current state and the action parameters. As a result, the value |42| will be printed
+out, being declared as |'y|'s value only after the external effect has been defined in the code.
+
+Furthermore, in order to make this statements usable for actual testing scenarios, |externally|
+supports aborting the execution of the system. For this purpose, there exists a member
+\begin{lstlisting}
+  def abort: Nothing = throw AbortExternallyException
+\end{lstlisting}
+and |externally| is, in fact, not only a trivial wrapper around a thunk, but catches this exception
+and \enquote{transforms} the result:
+\begin{lstlisting}
+  def externally(block: => Unit): ExternalAction[State] = 
+    ExternalAction(() => {
+      try {
+        block
+        Succeeded
+      } catch {
+        case AbortExternallyException => Failed
+      }
+    })
+\end{lstlisting}
+Therefore, also the result of the closure used in |ExternalAction| is not |Unit|, but
+|ExternalResult|, which can be either |Succeeded| or |Failed|. This result is checked in the |run|
+method of |ActionSystem|, and, if negative, stops it from producing further values for the
+|Stream[Choice]|.
+
+This possibility should help when, for example, using external statements to do side-by-side testing
+of an underlying \abbrev{SUT}. One could imagine to use an Action System to simulate expected
+behaviour, and at every step comparing its modelled output to the real system; if a erroneous
+difference occurs, the execution can be halted immediately. A modification of the SimpleRocket
+example, involving examples of external statements, is given in~\aref{sec:extendedsimplerocket}.
+
+Using exceptions in such a way, namely, to introduce non-local control flow, might be considered
+almost an abuse by some people~-- this estimation is, however, largely depending on one's
+background. For example, Scala, unlike many other languages, does not have a |break| statement for
+loops. Instead, a very similar construct to the above is used in the standard library to implement
+|scala.util.control.Breaks|~-- providing a \emph{library} function implementing |break|%
+\footnote{\protect\url{http://www.scala-lang.org/api/current/index.html\#scala.util.control.Breaks}
+  (visited on 2015-06-30)}. This power of exceptions to implement non-local control flow has been
+explored in~\cite{lillibridge1999:unchecked}, where a variant of them is shown to be equally
+powerful to the |call/cc| operator of many \abbrev{LISP}s, and is also marginally discussed
+in~\cite{pierce2002:types}. It can be considered very useful for \dsls{} in situations like this~--
+if used wisely.
+
+\newthought{As a third enhancement} to the original functionality, there is provided a mixin which
+allows to translate the symbolic representation of the action system to another representation,
+which might be used by an external library (for example, to actually perform mutation testing on the
+defined system). As previously mentioned, there is one translator to the \texttt{as2Bmc}
+library~\cite{maderbacher2016:weak}. This functionality is provided in a trait |As2BmcTranslator|,
+having a self type of |ActionSystem { type State = Int }|, which is a refinement type ensuring that
+the trait can only be mixed in to |ActionSystem|s with a |State| type of |Int|~-- the reason for
+this being that currently, |ActionSystem| does not have a sufficient handling of arbitrary types,
+and integers are in most cases enough to encode all necessary information of a system.
+
+\begin{lstlisting}[style=floating, label=lst:translator,
+  caption={Overview of the body of \texttt{As2BmcTranslator}. The actual implementations are
+    left out.}]
+  trait As2BmcTranslator { self: ActionSystem { type State = Int } =>
+    def toAs2Bmc: ast.ActionSystemTy = ???
+    private def translateExpression(
+      expr: exp.Expression[State]): ast.ExpressionTyped = ???
+    private def translateCondition(
+      cond: exp.Condition[State]): ast.ExpressionTyped = ???
+  }
+\end{lstlisting}
+
+An overview of the translation mixin's body is listed in~\autoref{lst:translator}. There, it can be
+seen that there is only one relevant method, |toAs2Bmc|, returning the \abbrev{AST} of an action
+system in the \enquote{foreign} representation. The other two methods are used only internally to
+translate the respective parts of the expression syntax, as indicated by their names; their
+implementation is quite mechanical, since both representations are quite similar, and both consist
+only of a |match| statement. For example, the first three lines of |translateExpression| are
+\begin{lstlisting}
+  case exp.Variable(v) => ast.VariableExpTy(v.name.toString, stateType)
+  case exp.Constant(c) => ast.NumConstantExpTy(c, stateType)
+  case exp.Application("+", a, b) =>
+    ast.BinOpExpTy(ast.Addition, translateExpression(a), 
+                   translateExpression(b), stateType)
+\end{lstlisting}
+
+As indicated, the translation of the basic \abbrev{AST} is rather trivial, since both
+representations store the same fashion of Action Systems in a similar structure; the one thing to be
+improved is the handling of types. They are represented internally via tagging in \texttt{as2bmc},
+whereas \actium{} currently uses a path-dependent type in Scala, and can currently only be
+practically used for very simple settings (mostly integers).
+
+
+%%% Local Variables: 
+%%% TeX-master: "document"
+%%% End:

@@ -1,0 +1,50 @@
+\phantomsection
+\addcontentsline{toc}{chapter}{Introduction}
+\chapter*{Introduction}
+
+Exploring Domain Specific Languages (\dsls{}) is a very broad topic. They have been around for a
+long time, and inspected in many ways, for many different purposes, in many implementations. This
+work therefore tries to focus on some core aspects in a limited setting. On the one hand, Scala's
+capabilities for writing embedded \dsls{} shall be investigated and summarized. This includes the
+inquiry of the relevant syntactic and semantic features of the language, of how and to what extent
+they help in the implementation of \dsls{}, and the examination of existing patterns for that
+purpose (of theoretical nature as well as occuring in practical software). This part of the
+exploration is mostly theoretical or based on small examples~-- it contains explanations about the
+language, about its background, and about how it can be used.
+
+On the other hand, a somewhat larger, concrete example of an embedded \dsl{} shall be constructed in
+practice. This example is a library for the definition of Action Systems, as they are used in
+model-based mutation testing~\cite{aichernig2014:killing,aichernig2009:mutation}. With this
+practical project, the actual development of a \dsl{} library in Scala will be analyzed, with the
+aim of gaining insight into what a development process with such goals can look like (and what
+difficulties it might involve), into where the language helps with the embedding of a \dsl{} and
+where it hampers it, and finally into how useful the previously examined language featureas are in
+practice~-- expecially, if some desireable properties are missing, or if some parts could in fact be
+done better with different means.
+
+\newthought{The work is structured as follows}: There are two logical parts. In the first three
+sections, concepts and techniques for \dsls{} in Scala are explained.  At the beginning,
+\autoref{sec:concepts} gives an overall view of domain-specific languages and Scala as a programming
+language. It shortly introduces Scala's background and reviews \dsls{} in general, explaining their
+foundation and position in the history of programming languages, discusses advantages and
+disadvantages, and defines some commonly used terms. Then, \autoref{sec:syntax} gives an intoduction
+into parts of Scala's syntax which are the most relevant and useful to writing embedded \dsls{},
+includung examples of their usage. Thirdly, \autoref{sec:patterns} shows how the previously
+introduced syntactic constructs can be combined into some useful patterns, which help program
+organization and development when working with \dsls{}.
+
+Building on that, the remaining three sections consist of the description of the practical part of
+the thesis: an implementation of an embedded \dsl{} for describing Action Systems, with the working
+title \actium. Initially, \autoref{sec:action_systems} gives the theoretical introduction into
+Action Systems, and explains their usage and special variant in model-based (mutation) testing. It
+follows \autoref{sec:implementation}, in which the implementation of \actium{} is
+summarized. Special focus is layed on the design parts where the described above language features
+were used; notable decisions or interesting constructs used are pointed out. This section also gives
+an overview of the functionality and usage of the implementation. Finally, \autoref{sec:resumee}
+reflects on the practical part, mentions possible improvements or further directions, and summarizes
+the advantages and disadvantages for this type of implementation, as opposed to other possibilities.
+
+
+%%% Local Variables: 
+%%% TeX-master: "document"
+%%% End:

@@ -1,0 +1,197 @@
+\chapter{Résumé: What Can Be Learned From This}
+\label{sec:resumee}
+
+This section shall reflect on the practical part, with respect to the questions stated in the
+introduction: how do the described language features help with real programming problems, which of
+them are most useful, and what is missing? What are advantages and disadvantages of the taken
+approach? Where could it be improved, and what are possible future directions? How did the
+development process took course, and what can be learned from the implementation and its design?
+
+\newthought{In general, it can be said} that Scala fulfilled most of the expectations about its
+syntax and semantics' abilities. Comparing the original syntax:
+\begin{lstlisting}[language={}]
+  powerOn() if engine == 0 && !(mode == Destroyed) then
+  {
+    engine := 1;
+  };
+\end{lstlisting}
+with the finally achieved one:
+\begin{lstlisting}
+  when('PowerOn) given engine === 0 && mode =!= Destroyed then_do (
+    engine := 1
+  )
+\end{lstlisting}
+we see that a well matching analogy could be created, which would probably be understood right away
+by someone used to the external syntax. That this matching is quite accurate can also be observed by
+comparing the full original example in~\aref{sec:simplerocket_original} with its translation
+in~\aref{sec:simplerocket}.
+
+Furthermore, a few useful extra features have been implemented, such as a bit more flexibility in
+the keyword usage (|given| and |when| can be swapped, |and|, |but| and or used for building the
+guards, and multiple actions given the same label), or the addition of external statements to allow
+useful mixing between the system behaviour and Scala code. The feasibility of integrating the
+library with an existing toolchain has not been practically tested, but a translation of the
+symbolic representation of \actium{} Action Sytstems to the format used by \texttt{as2bmc} has been
+provided with little effort. Since a fully symbolic approch is used anyway, other translations
+should also not really be a problem. 
+
+\newthought{The process of developing the library} went through multiple steps. At first, a kind of
+top-down approach was tried: this consisted of only defining an interface, which should resemble the
+\enquote{look and feel} of the existing syntax, and contained just dummy implementations. Using this
+syntax, a few difficulties and dead ends could already be ruled out, and most of the concrete
+keywords and the \enquote{style of writing} were fixed (like the definition of all actions within
+the primary constructor of a subclass of |ActionSystem|, or the idea of using Gherkin's keywords
+|given| and |when|). Still, some syntactic subtleties of the \dsl{} and some practical needs could
+not be identified at this stage.
+
+Therefore, when it came to actually implementing the functionality of running Action Systems, the
+previous code needed to be rewritten completely, leaving behind only its main ideas. The reason for
+this was that it turned out to be much easier to try out different variants of expressing domain
+specific constructs when a working system was already given~-- this is because then the constructs
+can immediately be tested for fitting the underlying system, and for not interfering with each other
+later. With that insight in mind, at first, an almost completely working non-\dsl{} implementation
+of |ActionSystem| was written, which essentially stayed the same until the final version. On top of
+this underlying implementation, the additional mixin |GherkinSyntax| was provided, building on the
+few underlying constructs provided by |ActionSystem| in the way described
+in~\autosubref{sec:improving_syntax}.
+
+This turned-around approach proved much more practical. While for a smaller, more strictly defined
+target \dsl{} syntax, it might actually be easier to start at the \enquote{top} of the library and
+then implement out dummy interfaces, until an underlying implementation is completed, the more
+bottom-up way of layering the convenience syntax above a predefined simple, conventional, and
+working functionality actually turned out to be more fruitful. In retrospection, having such a
+separation is also more desirable from architectural and maintainance points of view; for it allows
+to separate concerns much better, leads to less coupling, and probably facilitates testing
+(although, honestly speaking, since the whole development was of a rather experimental nature, these
+concerns were not much considered and often neglected in praxis~-- but this does not relativize named
+points). The a-posteriori introduction of other, not primarily considered \dsls{} (for example, an
+external variant), or stacking multiple ones, is also enabled and simplified in this way.
+
+\newthought{Concerning the advantages of Scala's syntax}, a certain dichotomy can be observed. On
+the one hand, it almost everything that was wanted to be expressed could be implemented somehow. In
+this respect, the ease of defining \abbrev{ADT}s with custom operators was of much help; but
+especially implicits turned out to be the rescue to many of the more intricate problems (so, for
+example, the solution to \enquote{lazy capturing} of state variables described
+in~\autoref{lst:external_example}). Their universal applicability to interfere almost anywhere in an
+expression, and in a way transform the types of values there, is a unique and highly beneficial
+concept.
+
+On the other hand, there were some problems that could not be solved (or rather, some desired syntax
+that could not be expressed) by standard means. The primary example of this is the need to put the
+statements of an action in round parentheses, separated by commata, instead of a block and thus
+looking like a language statement. This is due to the fact that \actium{} needs to use a deep
+embedding (to be able to operate on its underlying representation), which requires passing every
+\enquote{syntactic form} of the \dsl{} as a Scala expression. Now, if a block were used to pass
+statements into |then_do|, that would always evaluate to only the last expression in its body. By
+defining |then_do| to take a variadic parameter list, this can be resolved, at the cost of a less
+intuitive syntax. This problem could in principle be solved by using a macro for |then_do|, which
+takes the block argument as an expression, splits it into the individual statment expressions, and
+puts them in a list; however, as mentioned, practical macro implementations are outside the scope of
+this work.
+
+Another feature of Scala's syntax has a sometimes unintuitive behaviour as well: the dotless calls
+used for |given| and |when|. Concretely, due to the way the parser is working and how the resulution
+of dottless calls is defined, they cannot be interrupted by newlines; that is, writing
+\begin{lstlisting}
+  when('PowerOn) 
+  given engine === 0 && mode =!= Destroyed then_do (
+    engine := 1
+  )
+\end{lstlisting}
+would not work, since the |given| in the second line is not recognized as a continued invocation of
+the result of |when|, but as another statement. This is a basic limitation of Scala, and common
+knowledge, but can be unexpected from the thinking perspective of a \dsl{} user. It is not a new
+problem when using a deep embedding; for example, the internal \dsl{} variant of\texttt{sbt}'s
+configuration syntax (used for automatizing Scala builts, somewhat like \texttt{make}) suffers from
+the same limitation~\cite{sbt2015:reference}.
+
+In a similar fashion, though not as much striking, is the in some ways complicated definition of
+operator precedence used by Scala. In many cases, defined operators tend to \enquote{just work},
+because the most common symbols are assigned their \enquote{usual} precedences, and sensible
+exceptions are made for some special cases (such as recognizing |:=| as an assignment
+operator). However, sometimes, a certain operator name is desired to be used in a certain position,
+but will not do the right thing there without parentheses, because it associates in wrong ways. This
+was the case when, at first, the inequality operator for values was defined as |!==|; the redefinion
+as |=!=| does the right thing due to another exception rule, but noting this, and having to think
+about it for every operator, can be frustrating for both developer and \dsl{} user. An explicit
+possibility to manually define precedences, as in some other languages with operators, would be
+desireable here (like Haskell's |infixl|/|infixr| declarations).
+
+\newthought{When it comes to the expressiveness} of the Action Systems definable by \actium{}, there
+are some limitations compared to the original implementation. This is due to the fact that this
+work's main concern was to explore the limits of Scala for \dsl{} implementation; some additional
+features present in other languages based on Action Systems were therefore left out.
+
+For one, while the |ActionSystem| trait is parametrized by the type |State|, this is currently not
+of too much use, and |State| is in all examples and tests defaulted or constrained to |Int|. While,
+with some further work, the \dsl{} could be adapted to some custom state type (this requires syntax
+and semantics for values, expressions, and predicates on it), this quite complicated (if not
+impossible with standard features) to be done in general, in a satisfying way. The reason for this
+is, again, that we are working with a deep embedding~-- which means that type information needs to
+be present symbolically in the representation at runtime. On the other hand, the implementation is
+currently layed out to support static type checking in Scala, which is in principle desirable (since
+it allows to prevent certain errors at compile time).
+
+The difficulty now lies in the fact that to get all desired features, one would need to represent
+types both symbolically in the \abbrev{AST} and statically in Scala. This could theoretically be
+done by using a more complicated encoding (using type tags, singletons, or some other technique
+relying on more advanced typing techniques), but it is unclear whether such an encoding could be
+done without breaking the current syntax, and without having to require the definer of a type to
+write too much unnecessary boilerplate again. It would maybe be possible to achieve a satisfying
+result using macros, again. (The automatic derivation of generic type representations in
+Shapeless\footnote{\protect\url{https://github.com/milessabin/shapeless/wiki/Feature-overview:-shapeless-2.0.0\#generic-representation-of-sealed-families-of-case-classes}
+  (visited on 2015-07-03)} looks primising for this purpose.)
+
+Furthermore, there are some syntactic constructs which \actium{} currently lacks. For example, many
+concrete implementations using Action Systems allow to define actions in a nested way (that is, to
+define additional guards with different statements inside of one guard); adding support for these
+would mainly consist of adding a syntactic transformation, and adapting the \dsl{} to behave
+properly when the keywords are used not at top level.
+
+Moreover, there has also been come up with the idea of adding a kind of pattern matching support for
+action parameters. This would allow to make the writing of actions with similar guards easier and
+more readable, especially combined with some sort of wildcard pattern. Implementing this would
+require extending the parameter-passing mechanism a bit, and, most importantly, an algorithm for
+unification and ordering patterns by specificity. Whether implementing a reasonable variant of the
+latter can be done easily, without having to resort to, \eg, an external solver, is unknown to the
+author.
+
+Besides these enhancements of functionality, it would also be worthwhile to examine and enhance the
+coherence of the implementation with some formal execution semantics. For instance, currently, the
+order of execution of statements in an action is somewhat undefined (in practice, they are always
+executed sequentially). But since Action Systems are a means of formalizing concurrent systems,
+being able to exactly specify or know execution order would be a desirable property. It might also,
+even in the current variant, sometimes be unclear how, for example, the side effects of two external
+statements will be sequenced and influence each other.
+
+There is also an issue arising from the frequent use of traits and mixins, which in principle turned
+out to be a very practical pattern to separate concerns. While traits mostly allow to specify
+several degrees of coupling very exactly, they are sometimes still too weak to describe what is
+wanted to be achieved. This limitation was most obvious for the choice mixins, which define how
+parameters and actions are chosen during execution of an Action System. There, it soon became
+visible that while mixins are very practical for adding orthogonal static implementations, they are
+not so easy to use for configuring behaviour. Concretely, at the moment, one can only define an
+|ActionSystem| with certain choice behaviour by using the |with| syntax; but it often would be nice
+to allow finer configuration, such as setting specific weights for actions in the |RandomChoice|
+trait. Here, one could either investigate ways of elegantly allowing parametrization of mixin
+behaviour, or think about another alternative not using mixins in this way at all (such as a
+conventional design pattern). Reflecting this, we can conclude that traits are extremely useful for
+orthogonal static, but less so for runtime parametrization.
+
+Finally, the current implementation is a bit unsatisfactory from a \enquote{purist} functional
+programming point of view. This is because all settings, definitions, but also the execution of
+systems themselves are based on mutable updates. While this is not a major flaw, it would be
+desirable to rewrite as much as possible of the execution to using immutable updates~-- this would
+enhance some minor points, such as allowing easier pesistance of immediate states, or removing the
+necessity of resetting systems between test runs. More immutability would also perceived as more
+elegant by the author, and could lead to more correct code, as errors in mutable updates tend to be
+harder to find. The best way to introduce immutability would probably be to run an |ActionSystem|
+like a Mealy machine, or similar to a state monad (copying new state, instead of updating). On the
+other hand, there is little that can be done to remove mutable updates from the action definition
+syntax (the |given|\slash |when| statements in the primary constructor); but this seems more
+acceptable, as it is done only once at object initalization (at least one could revisit the visibity
+of |addAction|, and make it as private as possible).
+
+%%% Local Variables: 
+%%% TeX-master: "document"
+%%% End:

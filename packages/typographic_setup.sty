@@ -1,0 +1,187 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{typographic_setup.sty}
+
+%-------------------------------------------------------------------------------
+% PACKAGES
+%
+
+\RequirePackage[osf]{libertine} % libertine with biolinum
+\RequirePackage[scaled=0.95,varqu]{inconsolata} % monospace font
+
+\RequirePackage[libertine,varg]{newtxmath} % matching math fonts
+\def\libertine@figurestyle{OsF} % restore old style figures
+
+
+\RequirePackage{xcolor}
+\RequirePackage{enumitem}
+\RequirePackage[normalem]{ulem}
+\RequirePackage{hyperref}
+
+%-------------------------------------------------------------------------------
+% ADDITIONAL MACROS
+%
+
+% OPTIONAL TITLE SETTINGS
+\providecommand{\subtitle}[1]{\def\@subtitle{#1}}
+\providecommand{\@subtitle}{}
+
+\renewcommand{\maketitlehookb}{{\@bspresubtitle \@subtitle \@bspostsubtitle}}%
+\providecommand{\presubtitle}[1]{\def\@bspresubtitle{#1}}
+\providecommand{\postsubtitle}[1]{\def\@bspostsubtitle{#1}}
+
+% COLORS
+\definecolor{textblue}{RGB}{15, 100, 255}
+\definecolor{textred}{RGB}{255, 51, 66}
+
+% TYPOGRAPHIC FEATURES
+\providecommand{\textlssc}[1]{\textls{\textsc{#1}}}
+\providecommand{\lsscshape}{\lsstyle\scshape}
+\providecommand{\textlsuc}[1]{\textls{\MakeUppercase #1}}
+\providecommand{\lsucstyle}{\lsstyle\MakeUppercase}
+
+
+% alternative to \newthought after section headings
+\providecommand{\initial}[1]{\noindent{\@thoughtfont #1}}
+
+\newskip\@thoughtskipamount
+\@thoughtskipamount=1.0\baselineskip plus 0.5ex minus 0.2ex
+\newcommand{\@thoughtbreak}{\par\ifdim\lastskip<\@thoughtskipamount
+  \removelastskip\penalty-100\@thoughtskip\fi}
+\newcommand{\@thoughtskip}{\vspace\@thoughtskipamount}
+\providecommand{\newthought}[1]{\@thoughtbreak\noindent{\@thoughtfont #1}}
+%\providecommand{\newthought}[1]{\par\penalty-100\addvspace{\onelineskip}\noindent{\@thoughtfont #1}}
+
+
+\providecommand{\bemph}[1]{{\upshape#1}}
+\providecommand{\ep}[1]{\bemph{(}\kern-1pt#1\/\bemph{)}} % parentheses
+\providecommand{\eb}[1]{\bemph{[}#1\bemph{]}} % square brackets
+
+\providecommand{\abbrev}[1]{\textsc{\MakeLowercase{#1}}}
+\providecommand{\amp}{\textit{\MakeLowercase{\&}}}
+\providecommand{\midp}{\(\cdot\)}
+
+% OTHER USEFUL STUFF
+\providecommand{\email}[1]{\href{mailto:#1}{\nolinkurl{#1}}}
+
+
+%--------------------------------------------------------------------------------
+% STYLE OPTIONS
+%
+
+% BASIC FONT STUFF
+\newcommand{\@Hone}{\large\bfseries\lsscshape}%{\bfseries\lsucstyle}
+\newcommand{\@Htwo}{\bfseries}%{\upshape\rmstyle}%
+\newcommand{\@Hthree}{\rmshape}%{\itshape}%
+\newcommand{\@thoughtfont}{\lsscshape}%\bfseries
+\newcommand{\@titlefont}{\Huge} 
+\newcommand{\@subtitlefont}{\Large\itshape}
+\newcommand{\@captiontextfont}{\small\sffamily}%{\small\scshape}
+\newcommand{\@captionlabelfont}{\small\sffamily}%{\small\lsscshape}
+\newcommand{\@descrlabelfont}{\mdseries\lsscshape}
+\newcommand{\@abstracttitlefont}{\@Hone}
+
+\microtypesetup{factor=800}
+
+% NUMBERING
+% patched behaviour: subsections are not numbered, but
+% visible in toc and bookmarks.
+\setsecnumdepth{subsection}
+\setcounter{tocdepth}{2}
+\newcounter{subseclabel}
+\setcounter{subseclabel}{0}
+\let\oldsubsection\subsection
+\AtBeginDocument{%
+  \renewcommand{\subsection}[1]{%
+    %\pdfbookmark[2]{#1}{subsec:\the\value{subseclabel}}
+    \addtocounter{subseclabel}{1}
+    \phantomsection
+    \addcontentsline{toc}{subsection}{#1}
+    \oldsubsection*{#1}
+  }
+}
+% \AtBeginDocument{%
+%   \renewcommand{\subsection}[1]{%
+%     \phantomsection
+%     \addcontentsline{toc}{subsection}{#1}
+%     \pdfbookmark[3]{#1}{subsec:\the\value{subseclabel}}
+%     \addtocounter{subseclabel}{1}
+%     \addtocounter{subsection}{1}
+%     \oldsubsection*{#1}
+%   }
+% }
+
+% DIVISION HEADINGS
+\setsecheadstyle{\@Hone}
+\setsubsecheadstyle{\@Htwo}
+\setsubsubsecheadstyle{\@Hthree}
+\renewcommand{\abstractnamefont}{\@abstracttitlefont}
+
+% CAPTIONS
+\changecaptionwidth
+\captionwidth{0.9\textwidth}
+\captionnamefont{\@captionlabelfont}
+\captiontitlefont{\@captiontextfont}
+\captiondelim{:\hspace{1ex}}
+% \renewcommand{\@memmain@floats}{%
+%   \counterwithin{figure}{section}
+%   \counterwithin{table}{section}
+% }
+
+% LISTS
+\setlist{%
+  leftmargin=*,
+  itemsep=0pt,
+  topsep=1ex,
+  %labelwidth=1ex, 
+  align=left
+}
+
+% \providecommand{\@lbullet}{\raisebox{-2pt}{\resizebox{1.5ex}{1.5ex}{\(\cdot\)}}}
+\setlist[itemize]{label=\raisebox{0.7pt}{\textbullet}}
+\setlist[enumerate]{label=\arabic*.}
+\setlist[description]{font=\@descrlabelfont}
+
+% FOOTNOTES
+\setlength{\footmarkwidth}{-1sp}
+\setlength{\footmarksep}{0em}
+
+% EPIGRAPHS
+\setlength{\epigraphwidth}{0.6\textwidth}
+\epigraphtextposition{flushright}
+
+% TITLE PAGE
+\pretitle{\begin{center}\@titlefont\color{textred}}
+\posttitle{\end{center}\ifdefempty{\@subtitle}{\vspace{-2em}}{}}
+
+\presubtitle{\begin{center}\@subtitlefont}
+\postsubtitle{\end{center}\ifdefempty{\@subtitle}{}{\vspace{0.2em}}}
+
+\thanksmarkseries{arabic}
+
+% LINKS AND PDF OPTIONS
+\hypersetup{%
+  colorlinks=true,
+  citecolor=textblue,
+  linkcolor=textblue,
+  urlcolor=textblue
+}
+
+% space to underline
+\setlength{\ULdepth}{-1pt}
+
+% change url printing to underline?
+% \DeclareUrlCommand\ULurl@@{%
+%   \def\UrlFont{\ttfamily\color{textblue}}%
+%   \def\UrlLeft{\uline\bgroup}%
+%   \def\UrlRight{\egroup}}
+% \def\ULurl@#1{\hyper@linkurl{\ULurl@@{#1}}{#1}}
+% \DeclareRobustCommand*\ULurl{\hyper@normalise\ULurl@}
+
+% OTHER
+% fixes sqrt, because looks strange...
+\let\@oldsqrt\sqrt
+\renewcommand{\sqrt}[2][]{\@oldsqrt[\uproot{1}#1]{#2}}
+
+%%% Local Variables: 
+%%% TeX-master: "../document"
+%%% End:

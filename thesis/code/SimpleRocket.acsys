@@ -1,0 +1,60 @@
+def Rocket 
+{
+  types
+  {
+    MyNat = [0..10];
+    Mode = Air | Ground | Destroyed;
+    Bool = [0..1];
+  }
+
+  state
+  {
+    engine: Bool;
+    mode: Mode;
+    pos_x: MyNat;
+    pos_y: MyNat;
+  }
+
+  init
+  {
+    engine := 0;
+    mode := Ground;
+    pos_x := 0;
+    pos_y := 0;
+  }
+
+  actions
+  {
+    powerOn() if engine == 0 && !(mode == Destroyed) then
+    {
+      engine := 1;
+    };
+
+    powerOff() if engine == 1 && mode == Ground then
+    {
+      engine := 0;
+    };
+
+    start() if engine == 1 && mode == Ground then
+    {
+      mode := Air;
+    };
+
+    land() if mode == Air then
+    {
+      mode := Ground;
+    };
+
+    move(x:MyNat, y:MyNat) if mode == Air && engine == 1 then
+    {
+      pos_x := pos_x + x;
+      pos_y := pos_y + y;
+    };
+
+    destroy() if mode == Air then
+    {
+      mode := Destroyed;
+      engine := 0;
+    };
+  }
+}

@@ -1,0 +1,122 @@
+\chapter{Action Systems and Testing: Definition \& Background}
+\label{sec:action_systems}
+
+\lstset{deletestring=[b]'}
+
+In the remaining part of this bachelor thesis, the practical work done is described. It consists of
+a library to program a restricted variant of so-called Action Systems, a formalism similar to state
+machines or Labelled Transition Systems. The resulting library provides basic functionality to
+execute such Action Systems using various methods, and, most importantly, a \dsl{} to write them
+concisely in Scala. As many parts as possible are parametrized and thus left open for more specific
+use cases or future enhancements. The library has the current working title \actium, which is the
+latinized name of the small town of \kern1pt\greek{Ἄκτιον}\kern-4pt in ancient Greek, place of the
+Battle of Actium~-- but mostly, a pun on the word \enquote{action}.
+
+The description of the implementation consists of three parts. First, in this section, an
+introductory overview of the principles and the usage of Actions Systems and their application in
+model-based testing is given, to establish a background for the applicability of the library and
+terms commonly used. Following that, details of the implementation are provided, with a focus on the
+\dsl{} interface and how its form could be achieved programatically, exploiting the language
+features of Scala. In the couse of this, also an overview of the functionalities of \actium{} is
+given. Lastly, the finished state of the project is summarized, and the lessons learned are
+pronounced, which includes notes about the development process, about language features and their
+usage, and about other directions that could have been followed or were not tried out. This last
+section also reflects on the state of the library and its limitations, and possible improvements.
+
+\newthought{Action Systems were introduced} to formalize the collaboration of processes in
+distributed systems~\cite{back1983:decentralization}, and proposed as an approach dually to other,
+more process-focused approaches such as Communicating Sequential Processes
+(\abbrev{CSP})~\cite{hoare1978:communicating}. Somewhat informally, an Action System in that
+original formulation consists of \emph{processes}, each having associated some variables with their
+initializations, and (named) \emph{actions}, each consisting of a collection of participating
+processes, a \emph{guard} (predicate), and a statement. An action (or rather, its statement) can be
+executed if all of its processes are not currently participating in another action, and the guard is
+satisfied~-- in that case, the action is said to be \emph{enabled}~\cite{back1988:distributed}. The
+order in which the actions are executed, or how they are chosen if there are multiple enabled
+actions, is left unspecified; the system can be executed using different strategies, synchronuously
+or concurrently.
+
+In the programming work done for this bachelor thesis, a restricted variant of the above formulation
+is used, which is applied in the context of \emph{model-based mutation
+  testing}~\cite{aichernig2014:killing}. Mutation testing~\cite{hamlet1977:testing} is a technique
+to automatically generate a suite of useful test cases for a given system, by systematically
+injecting small syntactic faults (called \emph{mutants}). A test suite is then generated from the
+mutants by incrementally adding test cases which can distinguish a mutant from the original
+implementation. However, to ensure that mutants actually do anything \enquote{useful} (and not
+change the behaviour in a trivial way, or only change dead code), they must first be analyzed in
+some way, which traditionally involved manual inspection. Mutants with such \enquote{useless}
+behaviour are called \emph{equivalent} (since they are indistinguishable by test cases).
+
+Model-based mutation testing combines this approach with model-based testing: instead of directly
+operating on the system under test (\abbrev{SUT}), a model of it, called a \emph{test model}, is
+used. This model, commonly described in a symbolic, abstract fashion, is assumed to be correct and
+usually simpler than the \abbrev{SUT}, since only the properties of interest for testing are
+modelled. It has the advantages that one has more control of the test generation process; for one,
+it allows to treat the \abbrev{SUT} through the model in a purely abstract, black-box manner, which
+enables non-software systems to be tested as well. Equally important, checking mutants becomes
+easier, because the mutation process can be resticted to a more controlled set of syntactic mutation
+operators, and equivalent mutants can be excluded by means of constraint solving. Furthermore, by
+using such a model, nondeterminism, which can occur both in the \abbrev{SUT} or because of the
+abstractions arising from the modelling process, becomes easier to deal with. A rather complete
+overview of this methodology is given in~\cite{jobstl2014:model-based}.
+
+\newthought{The point of Action Systems} in this environent now is to serve as test models for
+mutation testing, especially of non-deterministic systems. Their quite simple, formal nature allows
+to concisely write a model of the \abbrev{SUT}, and then transform this system into a symbolic
+representation. This representation can be relatively easily mutated, and the resulting
+representations can be passed to a constraint or \abbrev{SMT} solver which analyzes the system and
+the mutants. That such an approach is not only possible, but can also be done efficiently, is shown
+in~\cite{aichernig2015:model}.\label{constraint_solving}
+
+\begin{lstlisting}[style=floating, label=lst:move_action, language={},
+  caption={Description of an action \lstinline|move| in a concrete syntax. The action has two
+    parameters, a guard, and a statement consisting of two sub-statements. \lstinline|mode|,
+    \lstinline|engine|, \lstinline|pos_x| and \lstinline|pos_y| are (global) state variables.}]
+  move(x:MyNat, y:MyNat) if mode == Air && engine == 1 then
+  {
+    pos_x := pos_x + x;
+    pos_y := pos_y + y;
+  };
+\end{lstlisting}
+
+As said above, for this purpose, it is practical to use a more narrowed down form of Action Systems
+than those defined initially. It turns out that it is possible to write a system in such a way that
+it looks similar to a state machine, but keeps the meaning of it as an Action System: we define a
+set of state variables with their initial values, and a set of labelled actions. Each of the actions
+can, in addition to the state variables, have parameters. It can also have a guard, involving its
+parameters and state variables, and a statement, assigning new values to state variables depending
+on their old values and the parameters. How such an action definition can look like is shown in
+\autoref{lst:move_action}, using a syntax very similar to the one defined in~\cite[p.~16]{tappler2015:symbolic}.
+
+In this formulation, the definition of processes is left implicitly; such systems are equivalent to
+Action Systems in which only one process exists, which also contains all the state variables. The
+named similarity to a state machine is not an unuseful one, but should be taken with care~-- the
+labels of actions should \emph{not} be mistaken for states. Rather, the similarity is of a different
+nature: the system in such a form is more like a \abbrev{FSM} with data path, but only one state. In
+such a setting, the actions are just labelled transitions from the one state to itself; they only
+differ in their conditions and update operations. The relevant information for execution of the
+system is then just the sequence of transition names, not of states. The data-path state is encoded
+in the state variables; such a system could in principle be transformed into a real state machine,
+but would soon suffer from state-space explosion (or turns out to be impossible, since the states
+covered by an Action System are not even necessarily finite). 
+
+A more accurate, though also more formal description of Action Systems (in the full original variant
+as well as the simplified one used here) can be given via Labelled Transition Systems
+~\cites[p.~11]{tappler2015:symbolic}[p.~21]{jobstl2014:model-based}; this formalism is also used to express formally the conformance
+relations between different models (test models, or mutated models of one original model), and is
+used practically as an intermediate representation in various conformance checking algorithms.
+
+The Action Systems which can be described by \actium{} are exactly of this nature. The basic style
+of the syntax is inspired by the one mentioned above; however, some keywords are taken from the
+Gherking specification
+language\footnote{\protect\url{https://github.com/cucumber/cucumber/wiki/Gherkin} (visited on
+  2015-06-06)}, and some things had of course to be changed due to Scala's native syntax. (The idea
+of using Gherkin-like syntax for a Scala \dsl{} is not new: it exists already at least in the
+|FeatureSpec| test style of
+ScalaTest.\footnote{\protect\url{http://doc.scalatest.org/2.2.4/\#org.scalatest.FeatureSpec}
+  (visited on 2015-06-24)})%
+
+
+%%% Local Variables: 
+%%% TeX-master: "document"
+%%% End:
