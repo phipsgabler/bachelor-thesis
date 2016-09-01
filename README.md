@@ -3,7 +3,7 @@
 This repository contains the LaTeX source of my bachelor thesis at TU Graz, 
 in the submitted version, and perhaps including some corrections in the future.
 This includes the accompanying presentation I gave about the topic, and some
-TeX-y stuff I used: my packages for [typgraphical improvements](packages/typograhic_setup.sty)
+TeX-y stuff I used: my packages for [typgraphical improvements](packages/typographic_setup.sty)
 and [listings customizations](packages/mylistings.sty), as well as a small [fix](packages/neohellenic.sty)
 to the Neohellenic font package, and a copy of an older `tikz-uml` version, which stopped 
 working between updates.
