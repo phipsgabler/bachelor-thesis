@@ -1,4 +1,4 @@
-** Note: this license does of course_not_ cover the Github logo in thesis/fig**
+__Note: this license does of course _not_ cover the Github logo in thesis/fig__
 
 # Attribution-ShareAlike 4.0 International
 
